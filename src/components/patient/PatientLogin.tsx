@@ -8,7 +8,7 @@ export const PatientLogin: React.FC = () => {
   const [isLogin, setIsLogin] = useState(true);
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false); // To disable buttons during auth calls
+  const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     email: '',
@@ -19,18 +19,13 @@ export const PatientLogin: React.FC = () => {
     bloodGroup: '',
     emergencyContact: '',
     walletAddress: '',
-    mobile: '', // Added mobile to formData state if it wasn't explicitly there
+    mobile: '',
   });
 
-  // Rename the login function from useAuth to avoid conflict with local handleLogin
   const { login: authContextLogin } = useAuth();
 
-  // Clean up useEffect for reCAPTCHA, it's no longer needed for email/password auth
   useEffect(() => {
-    // No Firebase phone auth related reCAPTCHA setup needed here
-    return () => {
-      // Any cleanup for non-Firebase specific things if they were here.
-    };
+    return () => {};
   }, [isLogin]);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -53,8 +48,42 @@ export const PatientLogin: React.FC = () => {
       if (authError) throw authError;
       if (!data.user) throw new Error('Login failed');
 
+      const { data: patientData } = await supabase
+        .from('patients')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+
+      if (patientData) {
+        const mappedUser = {
+          id: patientData.id,
+          name: patientData.name,
+          email: patientData.email,
+          mobile: patientData.mobile || '',
+          dateOfBirth: patientData.date_of_birth || '',
+          gender: patientData.gender || '',
+          bloodGroup: patientData.blood_group || '',
+          walletAddress: patientData.wallet_address || '0x' + Math.random().toString(16).substr(2, 40),
+          emergencyContact: patientData.emergency_contact || '',
+          qrCode: patientData.qr_code || '',
+        };
+        await authContextLogin(data.user.id, mappedUser, 'patient');
+      } else {
+        const minimalUser = {
+          id: data.user.id,
+          name: data.user.user_metadata?.name || 'Patient User',
+          email: data.user.email || formData.email,
+          mobile: '',
+          dateOfBirth: '',
+          gender: '',
+          bloodGroup: '',
+          walletAddress: '0x' + Math.random().toString(16).substr(2, 40),
+          emergencyContact: '',
+          qrCode: '',
+        };
+        await authContextLogin(data.user.id, minimalUser, 'patient');
+      }
     } catch (err: any) {
-      console.error('Login error:', err);
       setError(err.message || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
@@ -65,23 +94,20 @@ export const PatientLogin: React.FC = () => {
     e.preventDefault();
     setError(null);
 
-    // Frontend validation for current step before proceeding
     if (step === 1) {
-      // Correctly check formData for mobile
       if (!formData.name || !formData.dateOfBirth || !formData.gender || !formData.bloodGroup || !formData.mobile) {
         setError('Please fill in all personal information fields, including Mobile Number.');
         return;
       }
-      setStep(step + 1); // Proceed to next step if validation passes
-      return; // Important: return here to prevent immediate submission if not on final step
+      setStep(step + 1);
+      return;
     }
 
     if (step < 3) {
-      setStep(step + 1); // Proceed to next step (step 2 to step 3)
-      return; // Important: return here to prevent immediate submission if not on final step
+      setStep(step + 1);
+      return;
     }
     
-    // --- FINAL STEP: Register user with Supabase ---
     setLoading(true);
     try {
       if (!formData.email || !formData.password) {
@@ -117,20 +143,15 @@ export const PatientLogin: React.FC = () => {
         qr_code: 'patient-emergency-qr-' + Math.random().toString(36).substr(2, 9),
       };
 
-      console.log('Registration successful, saving to database:', patientDataToSave);
-      // Wait a moment for auth state to be set
       await new Promise(resolve => setTimeout(resolve, 1000));
       await authContextLogin(data.user.id, patientDataToSave, 'patient');
-      console.log('Patient data saved successfully');
     } catch (err: any) {
-      console.error('Registration error:', err);
       setError(err.message || 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Decide which handler to use based on isLogin state
   const handleSubmit = (e: React.FormEvent) => {
     if (isLogin) {
       handleLogin(e);
@@ -187,7 +208,6 @@ export const PatientLogin: React.FC = () => {
         </div>
       )}
 
-      {/* Biometric Login (Optional, might need more complex integration) */}
       <div className="flex items-center justify-center space-x-4 pt-4">
         <button
           type="button"
@@ -291,7 +311,6 @@ export const PatientLogin: React.FC = () => {
                 />
               </div>
 
-              {/* Add email and password fields for registration in step 1 */}
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
                 <input
@@ -313,7 +332,7 @@ export const PatientLogin: React.FC = () => {
                   className="block w-full px-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="Create a password (min 6 characters)"
                   required
-                  minLength={6} // Corrected attribute name
+                  minLength={6}
                   disabled={loading}
                 />
               </div>
@@ -448,82 +467,111 @@ export const PatientLogin: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-emerald-50 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-4">
-            <Shield className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            {isLogin ? 'Welcome Back' : 'Create Account'}
-          </h1>
-          <p className="text-gray-600 mt-2">
-            Secure your health. Be ready for any emergency.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          {isLogin ? renderLoginForm() : renderRegistrationStep()}
-
-          <div className="mt-8">
-            <button
-              type="submit"
-              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors"
-              disabled={loading} // Disable button during loading
-            >
-              {loading ? (isLogin ? 'Logging in...' : 'Registering...') : (isLogin
-                ? 'Login'
-                : step === 3
-                  ? 'Register and Generate Emergency QR'
-                  : 'Continue'
-              )}
-            </button>
+    <div className="min-h-screen bg-slate-900 relative overflow-hidden flex items-center justify-center p-4">
+      <div className="absolute inset-0">
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900"></div>
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl animate-pulse animation-delay-2000"></div>
+      </div>
+      
+      <div className="relative z-10 max-w-md w-full">
+        <div className="bg-white/10 backdrop-blur-2xl border border-white/20 rounded-3xl shadow-2xl p-8">
+          <div className="text-center mb-8">
+            <div className="relative inline-flex items-center justify-center w-20 h-20 bg-gradient-to-r from-blue-500 to-purple-600 rounded-3xl mb-6 shadow-2xl">
+              <Shield className="w-10 h-10 text-white" />
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-600 rounded-3xl blur-xl opacity-50 animate-pulse"></div>
+            </div>
+            <h1 className="text-3xl font-bold text-white mb-2">
+              {isLogin ? 'Welcome Back' : 'Join EDAV'}
+            </h1>
+            <p className="text-gray-300">
+              {isLogin ? 'Access your secure health vault' : 'Create your emergency health profile'}
+            </p>
           </div>
 
-          {!isLogin && step > 1 && (
+          <form onSubmit={handleSubmit}>
+            {isLogin ? renderLoginForm() : renderRegistrationStep()}
+
+            <div className="mt-8">
+              <button
+                type="submit"
+                className="group relative w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white py-4 px-4 rounded-2xl font-semibold shadow-2xl hover:shadow-blue-500/25 transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:transform-none overflow-hidden"
+                disabled={loading}
+              >
+                <span className="relative z-10">
+                  {loading ? (
+                    <div className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                      {isLogin ? 'Signing In...' : 'Creating Account...'}
+                    </div>
+                  ) : (
+                    isLogin ? 'Sign In Securely' : step === 3 ? 'Complete Registration' : 'Continue'
+                  )}
+                </span>
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-purple-700 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+              </button>
+            </div>
+
+            {!isLogin && step > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStep(step - 1);
+                  setError(null);
+                }}
+                className="w-full mt-3 py-3 px-4 text-gray-300 hover:text-white transition-all duration-300 border border-white/30 rounded-2xl hover:bg-white/10 backdrop-blur-sm transform hover:scale-105"
+                disabled={loading}
+              >
+                Back
+              </button>
+            )}
+          </form>
+
+          <div className="mt-6 text-center">
             <button
-              type="button"
               onClick={() => {
-                setStep(step - 1);
-                setError(null); // Clear errors when going back a step
+                setIsLogin(!isLogin);
+                setStep(1);
+                setError(null);
+                setLoading(false);
+                setFormData({
+                  email: '',
+                  password: '',
+                  name: '',
+                  dateOfBirth: '',
+                  gender: '',
+                  bloodGroup: '',
+                  emergencyContact: '',
+                  walletAddress: '',
+                  mobile: '',
+                });
               }}
-              className="w-full mt-3 py-3 px-4 text-gray-600 hover:text-gray-900 transition-colors"
-              disabled={loading} // Disable button during loading
+              className="text-blue-300 hover:text-white font-medium transition-all duration-300 hover:scale-105"
             >
-              Back
+              {isLogin ? "Don't have an account? Register" : 'Already have an account? Sign In'}
             </button>
-          )}
-        </form>
+          </div>
 
-        <div className="mt-6 text-center">
-          <button
-            onClick={() => {
-              setIsLogin(!isLogin);
-              setStep(1); // Always reset to step 1 when toggling
-              setError(null); // Clear errors
-              setLoading(false); // Reset loading state
-              setFormData({ // Clear form data for a fresh start
-                email: '',
-                password: '',
-                name: '',
-                dateOfBirth: '',
-                gender: '',
-                bloodGroup: '',
-                emergencyContact: '',
-                walletAddress: '',
-                mobile: '', // Ensure mobile is cleared
-              });
-            }}
-            className="text-blue-600 hover:text-blue-700 font-medium"
-          >
-            {isLogin ? "Don't have an account? Register" : 'Already registered? Login'}
-          </button>
-        </div>
-
-        <div className="mt-6 text-center">
-          <a href="#" className="text-xs text-gray-500 hover:text-gray-700">
-            Terms & Privacy Policy
-          </a>
+          <div className="mt-6 text-center">
+            <div className="flex items-center justify-center space-x-4 text-xs text-gray-400">
+              <a href="#" className="hover:text-white transition-colors">Terms</a>
+              <span>•</span>
+              <a href="#" className="hover:text-white transition-colors">Privacy</a>
+              <span>•</span>
+              <a href="#" className="hover:text-white transition-colors">Security</a>
+            </div>
+            
+            <div className="flex items-center justify-center space-x-6 mt-6 pt-6 border-t border-white/10">
+              <div className="flex items-center space-x-2">
+                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                <span className="text-xs text-gray-400">256-bit Encryption</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Shield className="w-3 h-3 text-blue-400" />
+                <span className="text-xs text-gray-400">HIPAA Compliant</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

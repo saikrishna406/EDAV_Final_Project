@@ -30,111 +30,77 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [loadingAuth, setLoadingAuth] = useState<boolean>(true);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        const supabaseUser = session.user;
-        let fetchedUserType: 'patient' | 'hospital' | null = null;
-        let fetchedUserData: User | Hospital | null = null;
-
-        try {
-          // Check if user is a patient
-          const { data: patientData } = await supabase
-            .from('patients')
-            .select('*')
-            .eq('id', supabaseUser.id)
-            .single();
-
-          if (patientData) {
-            // Map database fields to User interface
-            fetchedUserData = {
-              id: patientData.id,
-              name: patientData.name,
-              email: patientData.email,
-              mobile: patientData.mobile,
-              dateOfBirth: patientData.date_of_birth,
-              gender: patientData.gender,
-              bloodGroup: patientData.blood_group,
-              walletAddress: patientData.wallet_address,
-              emergencyContact: patientData.emergency_contact,
-              qrCode: patientData.qr_code,
-            } as User;
-            fetchedUserType = 'patient';
-          } else {
-            // Check if user is a hospital
-            const { data: hospitalData } = await supabase
-              .from('hospitals')
-              .select('*')
-              .eq('id', supabaseUser.id)
-              .single();
-
-            if (hospitalData) {
-              fetchedUserData = hospitalData as Hospital;
-              fetchedUserType = 'hospital';
-            }
-          }
-
-          if (fetchedUserData && fetchedUserType) {
-            if (fetchedUserType === 'patient') {
-              setUser(fetchedUserData as User);
-              setHospital(null);
-            } else {
-              setHospital(fetchedUserData as Hospital);
-              setUser(null);
-            }
-            setUserType(fetchedUserType);
-            setIsAuthenticated(true);
-            localStorage.setItem('userType', fetchedUserType);
-          }
-        } catch (error) {
-          console.error('Error fetching user profile:', error);
+    // Try to restore user data from localStorage
+    const savedUserType = localStorage.getItem('userType');
+    const savedUserData = localStorage.getItem('userData');
+    
+    if (savedUserType && savedUserData) {
+      try {
+        const userData = JSON.parse(savedUserData);
+        if (savedUserType === 'patient') {
+          setUser(userData);
+          setHospital(null);
+        } else {
+          setHospital(userData);
+          setUser(null);
         }
-      } else {
-        setUser(null);
-        setHospital(null);
-        setUserType(null);
-        setIsAuthenticated(false);
+        setUserType(savedUserType as 'patient' | 'hospital');
+        setIsAuthenticated(true);
+        console.log('Restored user data from localStorage:', userData);
+      console.log('Blood group from localStorage:', userData.bloodGroup || userData.blood_group);
+      } catch (error) {
+        console.error('Failed to restore user data:', error);
         localStorage.clear();
       }
-      setLoadingAuth(false);
-    });
-
-    return () => subscription.unsubscribe();
+    }
+    
+    setLoadingAuth(false);
   }, []);
 
-  const login = async (supabaseUid: string, userData: User | Hospital, type: 'patient' | 'hospital') => {
+  const login = async (uid: string, userData: User | Hospital, type: 'patient' | 'hospital') => {
     try {
-      console.log('Attempting to save user data:', { supabaseUid, userData, type });
-      if (type === 'patient') {
-        const { data, error } = await supabase.from('patients').upsert({ ...userData, id: supabaseUid });
-        if (error) {
-          console.error('Supabase upsert error:', error);
-          throw error;
+      console.log('Setting user data:', { uid, userData, type });
+      console.log('Blood group in userData:', userData.bloodGroup || userData.blood_group);
+      
+      // Try to save to Supabase, but don't fail if it doesn't work
+      try {
+        if (type === 'hospital') {
+          await supabase.from('hospitals').upsert({ ...userData, id: uid });
+          console.log('Hospital data saved to Supabase');
+        } else {
+          await supabase.from('patients').upsert({ ...userData, id: uid });
+          console.log('Patient data saved to Supabase');
         }
-        console.log('Patient data upserted successfully:', data);
+      } catch (dbError) {
+        console.warn('Failed to save to Supabase, continuing with local auth:', dbError);
+      }
+      
+      if (type === 'patient') {
         setUser(userData as User);
         setHospital(null);
       } else {
-        const { data, error } = await supabase.from('hospitals').upsert({ ...userData, id: supabaseUid });
-        if (error) {
-          console.error('Supabase upsert error:', error);
-          throw error;
-        }
-        console.log('Hospital data upserted successfully:', data);
         setHospital(userData as Hospital);
         setUser(null);
       }
       setUserType(type);
       setIsAuthenticated(true);
       localStorage.setItem('userType', type);
+      localStorage.setItem('userData', JSON.stringify(userData));
+      console.log('Login successful');
     } catch (error) {
-      console.error('Error saving user data during login:', error);
+      console.error('Error during login:', error);
       throw error;
     }
   };
 
   const logout = async () => {
     try {
-      await supabase.auth.signOut();
+      setUser(null);
+      setHospital(null);
+      setUserType(null);
+      setIsAuthenticated(false);
+      localStorage.clear();
+      console.log('Logout successful');
     } catch (error) {
       console.error('Error during logout:', error);
     }

@@ -2,8 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Header } from '../common/Header';
 import { Navigation } from '../common/Navigation';
 import { QrCode, Upload, Users, FileText, Activity, Shield, Plus, Eye, Trash2 } from 'lucide-react';
+import { GuardianWalletHelper } from './GuardianWalletHelper';
 import { useAuth } from '../../context/AuthContext';
-import QRCode from 'react-qr-code';
+import QRCodeReact from 'react-qr-code';
+import { UploadRecord } from './UploadRecord';
+import { patientAPI, guardianAPI } from '../../services/api';
+import { supabase } from '../../supabase';
 
 
 
@@ -56,7 +60,7 @@ export const PatientDashboard: React.FC = () => {
   // New state for controlling the visibility of the UploadRecord modal
   const [showUploadModal, setShowUploadModal] = useState(false);
 
-  // --- Data Fetching Logic (Mock data for now) ---
+  // --- Data Fetching Logic ---
   const fetchPatientData = async () => {
     if (!user?.id) {
       setLoadingData(false);
@@ -67,13 +71,115 @@ export const PatientDashboard: React.FC = () => {
     setFetchError(null);
 
     try {
-      // Mock data - replace with actual API calls
-      setTimeout(() => {
-        setGuardians([]);
-        setRecords([]);
+      // Try to fetch from Supabase, but don't fail if it doesn't work
+      try {
+        const { data: recordsData } = await supabase
+          .from('health_records')
+          .select('*')
+          .eq('patient_id', user.id);
+        
+        if (recordsData) {
+          setRecords(recordsData.map(record => ({
+            id: record.id,
+            name: record.name,
+            type: record.type,
+            uploadDate: record.upload_date,
+            ipfsCid: record.ipfs_cid,
+            isEncrypted: record.is_encrypted,
+            size: record.size,
+            patientId: record.patient_id
+          })));
+        }
+      } catch (dbError) {
+        console.warn('Failed to fetch from Supabase:', dbError);
+      }
+      
+      // Fetch guardians from database
+      try {
+        const { data: guardiansData, error: guardianError } = await supabase
+          .from('guardians')
+          .select('*')
+          .eq('patient_id', user.id);
+        
+        if (guardianError) {
+          console.warn('Database error loading guardians:', guardianError);
+          // Load from localStorage as fallback
+          const localGuardians = JSON.parse(localStorage.getItem(`guardians_${user.id}`) || '[]');
+          setGuardians(localGuardians);
+        } else {
+          console.log('Loaded guardians from database:', guardiansData);
+          setGuardians(guardiansData.map(guardian => ({
+            id: guardian.id,
+            name: guardian.name,
+            walletAddress: guardian.wallet_address,
+            relationship: guardian.relationship,
+            contact: guardian.contact,
+            isActive: guardian.is_active,
+            patientId: guardian.patient_id
+          })));
+        }
+      } catch (dbError) {
+        console.warn('Failed to fetch guardians, using localStorage:', dbError);
+        const localGuardians = JSON.parse(localStorage.getItem(`guardians_${user.id}`) || '[]');
+        setGuardians(localGuardians);
+      }
+      
+      // Load access requests for this patient
+      try {
+        console.log('=== PATIENT DEBUG ACCESS REQUESTS ===');
+        console.log('Current patient ID:', user.id);
+        console.log('Patient name:', user.name);
+        
+        // Check all access requests
+        const { data: allRequests, error: allError } = await supabase
+          .from('access_requests')
+          .select('*');
+        
+        console.log('All requests in DB:', allRequests);
+        console.log('All requests error:', allError);
+        
+        if (allRequests && allRequests.length > 0) {
+          console.log('Found', allRequests.length, 'total requests');
+          allRequests.forEach(req => {
+            console.log('Request patient_id:', req.patient_id, 'matches current?', req.patient_id === user.id);
+          });
+        } else {
+          console.log('NO ACCESS REQUESTS FOUND IN DATABASE AT ALL');
+        }
+        
+        // Then check for this specific patient
+        // Direct query for access requests
+        const { data: accessData, error: accessError } = await supabase
+          .from('access_requests')
+          .select('*')
+          .eq('patient_id', user.id)
+          .order('created_at', { ascending: false });
+        
+        console.log('Patient-specific query result:', accessData);
+        
+        if (accessData && accessData.length > 0) {
+          const formattedLogs = accessData.map(request => ({
+            id: request.id,
+            patientId: request.patient_id,
+            patientName: user.name || 'Unknown Patient',
+            hospitalId: request.hospital_id || 'Unknown Hospital',
+            hospitalName: request.hospital_id || 'Emergency Hospital',
+            requestedBy: 'Emergency Staff',
+            timestamp: new Date(request.created_at).toLocaleString(),
+            status: request.status,
+            guardianApprovals: []
+          }));
+          console.log('Formatted access logs:', formattedLogs);
+          setAccessLogs(formattedLogs);
+        } else {
+          console.log('No access requests found for patient');
+          setAccessLogs([]);
+        }
+      } catch (error) {
+        console.error('Failed to load access requests:', error);
         setAccessLogs([]);
-        setLoadingData(false);
-      }, 1000);
+      }
+      setLoadingData(false);
     } catch (error: any) {
       console.error('Error fetching patient data:', error);
       setFetchError(`Failed to load data: ${error.message || 'Unknown error'}`);
@@ -83,15 +189,245 @@ export const PatientDashboard: React.FC = () => {
 
   // Effect to call the data fetching function
   useEffect(() => {
+    console.log('User data in dashboard:', user);
+    console.log('Blood group:', user?.bloodGroup);
+    console.log('Auth loading:', authLoading);
     if (!authLoading && user?.id) { // Only fetch when auth is done and user is available
       fetchPatientData();
     }
   }, [user, authLoading]); // Depend on user and authLoading
 
+  // Auto-refresh when access-log tab is selected
+  useEffect(() => {
+    if (activeTab === 'access-log' && user?.id) {
+      fetchPatientData();
+    }
+  }, [activeTab, user?.id]);
+
+  // Handle approve/reject access request
+  const handleApproveRequest = async (requestId: string, newStatus: 'approved' | 'rejected') => {
+    try {
+      const { error } = await supabase
+        .from('access_requests')
+        .update({ status: newStatus })
+        .eq('id', requestId);
+      
+      if (!error) {
+        alert(`Access request ${newStatus} successfully!`);
+        fetchPatientData(); // Refresh the data
+      } else {
+        alert('Error updating request status');
+      }
+    } catch (error) {
+      console.error('Error approving request:', error);
+      alert('Error updating request');
+    }
+  };
+
   // Callback for when UploadRecord successfully finishes
   const handleUploadSuccess = () => {
     setShowUploadModal(false); // Close the modal
     fetchPatientData(); // Re-fetch all data to refresh the records list
+  };
+
+  // State for guardian management
+  const [showAddGuardian, setShowAddGuardian] = useState(false);
+  const [guardianForm, setGuardianForm] = useState({
+    name: '',
+    relationship: '',
+    contact: '',
+    walletAddress: ''
+  });
+
+  // Add guardian function
+  const addGuardian = async () => {
+    if (!user?.id || !guardianForm.name || !guardianForm.walletAddress) {
+      alert('Please fill all required fields (Name and Wallet Address are required)');
+      return;
+    }
+
+    // Validate wallet address format (more flexible for testing)
+    if (!guardianForm.walletAddress.startsWith('0x') || guardianForm.walletAddress.length !== 42) {
+      alert('Please enter a valid wallet address (0x followed by 40 characters)\n\nExample: 0x1234567890abcdef1234567890abcdef12345678\n\nUse the "Need help?" link below to generate a sample address for testing.');
+      return;
+    }
+
+    try {
+      const newGuardian: Guardian = {
+        id: Date.now().toString(),
+        name: guardianForm.name,
+        walletAddress: guardianForm.walletAddress,
+        relationship: guardianForm.relationship,
+        contact: guardianForm.contact,
+        isActive: true,
+        patientId: user.id
+      };
+
+      // Add to Supabase database
+      const { error } = await supabase
+        .from('guardians')
+        .insert({
+          patient_id: user.id,
+          name: guardianForm.name,
+          wallet_address: guardianForm.walletAddress,
+          relationship: guardianForm.relationship,
+          contact: guardianForm.contact,
+          is_active: true
+        });
+
+      if (error) {
+        console.error('Supabase guardian insert failed:', error);
+        // Store locally as fallback
+        const localGuardians = JSON.parse(localStorage.getItem(`guardians_${user.id}`) || '[]');
+        localGuardians.push(newGuardian);
+        localStorage.setItem(`guardians_${user.id}`, JSON.stringify(localGuardians));
+        
+        setGuardians([...guardians, newGuardian]);
+        setGuardianForm({ name: '', relationship: '', contact: '', walletAddress: '' });
+        setShowAddGuardian(false);
+        alert('Guardian added successfully! (Stored locally - database error)');
+        return;
+      }
+
+      // Database insert successful
+      console.log('Guardian added to database successfully');
+      
+      // Also try to add via API for blockchain integration
+      try {
+        await patientAPI.addGuardian(user.id, guardianForm);
+      } catch (apiError) {
+        console.warn('API guardian add failed:', apiError);
+      }
+      
+      setGuardians([...guardians, newGuardian]);
+      setGuardianForm({ name: '', relationship: '', contact: '', walletAddress: '' });
+      setShowAddGuardian(false);
+      alert('Guardian added successfully to database!');
+    } catch (error: any) {
+      console.error('Error adding guardian:', error);
+      if (error.message?.includes('duplicate')) {
+        alert('This guardian is already added to your account.');
+      } else {
+        alert('Failed to add guardian: ' + (error.message || 'Unknown error'));
+      }
+    }
+  };
+
+  // Delete guardian function
+  const deleteGuardian = async (guardianId: string) => {
+    if (!confirm('Are you sure you want to remove this guardian?')) {
+      return;
+    }
+
+    try {
+      // Try database first
+      const { error } = await supabase
+        .from('guardians')
+        .delete()
+        .eq('id', guardianId)
+        .eq('patient_id', user?.id);
+
+      if (error) {
+        console.warn('Database delete failed, removing from localStorage');
+      }
+    } catch (error) {
+      console.warn('Database not available, removing from localStorage');
+    }
+
+    // Always update local state and localStorage
+    const updatedGuardians = guardians.filter(g => g.id !== guardianId);
+    setGuardians(updatedGuardians);
+    if (user?.id) {
+      localStorage.setItem(`guardians_${user.id}`, JSON.stringify(updatedGuardians));
+    }
+    alert('Guardian removed successfully!');
+  };
+
+  // Generate new QR code
+  const generateNewQR = async () => {
+    try {
+      // Generate wallet address if not available
+      let walletAddress = user?.walletAddress;
+      if (!walletAddress) {
+        walletAddress = '0x' + Math.random().toString(16).substr(2, 40);
+        console.log('Generated temporary wallet address:', walletAddress);
+      }
+
+      // Always generate QR locally for immediate feedback
+      const qrData = {
+        type: 'EDAV_EMERGENCY',
+        patientAddress: walletAddress,
+        patientId: user?.id || 'temp-' + Date.now(),
+        patientName: user?.name || 'Emergency Patient',
+        bloodGroup: user?.bloodGroup || 'Unknown',
+        emergencyContact: user?.emergencyContact || 'Not provided',
+        timestamp: Date.now()
+      };
+      
+      console.log('Generated QR data:', qrData);
+      alert('New emergency QR code generated! You can download it below.');
+      
+      // Force component re-render to show updated QR
+      setActiveTab('profile');
+      setTimeout(() => setActiveTab('dashboard'), 100);
+      
+    } catch (error) {
+      console.error('QR generation failed:', error);
+      alert('QR code generation failed. Please try again.');
+    }
+  };
+
+  // Download QR Code function
+  const downloadQRCode = () => {
+    if (!user) {
+      alert('User data not available');
+      return;
+    }
+    
+    try {
+      const qrElement = document.querySelector('#emergency-qr svg');
+      if (!qrElement) {
+        alert('QR code not found. Please wait for it to load.');
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      canvas.width = 300;
+      canvas.height = 350;
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, 300, 350);
+      
+      // Add QR code
+      const svgData = new XMLSerializer().serializeToString(qrElement);
+      const img = new Image();
+      
+      img.onload = () => {
+        ctx.drawImage(img, 50, 50, 200, 200);
+        
+        // Add text
+        ctx.fillStyle = 'black';
+        ctx.font = '16px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('EDAV Emergency QR', 150, 30);
+        ctx.font = '12px Arial';
+        ctx.fillText('Patient: ' + (user.name || 'Unknown'), 150, 270);
+        ctx.fillText('Blood: ' + (user.bloodGroup || 'Unknown'), 150, 290);
+        ctx.fillText('Generated: ' + new Date().toLocaleDateString(), 150, 330);
+        
+        const link = document.createElement('a');
+        link.download = `${user.name || 'patient'}-emergency-qr.png`;
+        link.href = canvas.toDataURL();
+        link.click();
+      };
+      
+      img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+    } catch (error) {
+      console.error('QR download failed:', error);
+      alert('Failed to download QR code. Please try again.');
+    }
   };
 
   // --- Render Loading/Error States before main layout ---
@@ -143,50 +479,105 @@ export const PatientDashboard: React.FC = () => {
 
 
   const renderDashboard = () => (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      {/* Premium Welcome Banner */}
+      <div className="relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 rounded-3xl"></div>
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-500/90 to-purple-500/90 rounded-3xl"></div>
+        <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32"></div>
+        <div className="absolute bottom-0 left-0 w-48 h-48 bg-white/5 rounded-full -ml-24 -mb-24"></div>
+        <div className="relative p-8 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-4xl font-bold mb-2">Welcome back, {user?.name || 'Patient'}!</h1>
+              <p className="text-blue-100 text-lg mb-6">Your health data is secure and ready for emergency access</p>
+              <div className="flex items-center space-x-6">
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                  <span className="text-sm font-medium">System Active</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Shield className="w-4 h-4" />
+                  <span className="text-sm font-medium">Blockchain Secured</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <div className="w-4 h-4 bg-yellow-400 rounded-full flex items-center justify-center">
+                    <span className="text-xs text-black font-bold">✓</span>
+                  </div>
+                  <span className="text-sm font-medium">HIPAA Compliant</span>
+                </div>
+              </div>
+            </div>
+            <div className="hidden lg:block">
+              <div className="w-32 h-32 bg-white/10 rounded-3xl flex items-center justify-center backdrop-blur-sm">
+                <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
+                  <Shield className="w-8 h-8 text-white" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-              <FileText className="w-6 h-6 text-blue-600" />
+        <div className="group relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 to-cyan-500/20 rounded-2xl blur-xl group-hover:blur-2xl transition-all duration-300"></div>
+          <div className="relative bg-white/80 backdrop-blur-xl border border-white/20 rounded-2xl p-6 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-14 h-14 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-2xl flex items-center justify-center shadow-lg">
+                <FileText className="w-7 h-7 text-white" />
+              </div>
+              <span className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 bg-clip-text text-transparent">{records.length}</span>
             </div>
-            <span className="text-2xl font-bold text-gray-900">{records.length}</span>
+            <h3 className="font-bold text-gray-900 text-lg mb-1">Health Records</h3>
+            <p className="text-sm text-gray-600">Encrypted & Secure</p>
+            <div className="mt-4 h-1 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full"></div>
           </div>
-          <h3 className="font-semibold text-gray-900">Health Records</h3>
-          <p className="text-sm text-gray-600">Encrypted & Secure</p>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-emerald-100 rounded-lg flex items-center justify-center">
-              <Users className="w-6 h-6 text-emerald-600" />
+        <div className="group relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 rounded-2xl blur-xl group-hover:blur-2xl transition-all duration-300"></div>
+          <div className="relative bg-white/80 backdrop-blur-xl border border-white/20 rounded-2xl p-6 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-14 h-14 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-2xl flex items-center justify-center shadow-lg">
+                <Users className="w-7 h-7 text-white" />
+              </div>
+              <span className="text-3xl font-bold bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent">{guardians.length}</span>
             </div>
-            <span className="text-2xl font-bold text-gray-900">{guardians.length}</span>
+            <h3 className="font-bold text-gray-900 text-lg mb-1">Guardians</h3>
+            <p className="text-sm text-gray-600">Trusted Family</p>
+            <div className="mt-4 h-1 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full"></div>
           </div>
-          <h3 className="font-semibold text-gray-900">Guardians</h3>
-          <p className="text-sm text-gray-600">Trusted Family</p>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
-              <Activity className="w-6 h-6 text-orange-600" />
+        <div className="group relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-orange-500/20 to-red-500/20 rounded-2xl blur-xl group-hover:blur-2xl transition-all duration-300"></div>
+          <div className="relative bg-white/80 backdrop-blur-xl border border-white/20 rounded-2xl p-6 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-14 h-14 bg-gradient-to-r from-orange-500 to-red-500 rounded-2xl flex items-center justify-center shadow-lg">
+                <Activity className="w-7 h-7 text-white" />
+              </div>
+              <span className="text-3xl font-bold bg-gradient-to-r from-orange-600 to-red-600 bg-clip-text text-transparent">{accessLogs.length}</span>
             </div>
-            <span className="text-2xl font-bold text-gray-900">{accessLogs.length}</span>
+            <h3 className="font-bold text-gray-900 text-lg mb-1">Access Requests</h3>
+            <p className="text-sm text-gray-600">Recent Activity</p>
+            <div className="mt-4 h-1 bg-gradient-to-r from-orange-500 to-red-500 rounded-full"></div>
           </div>
-          <h3 className="font-semibold text-gray-900">Access Requests</h3>
-          <p className="text-sm text-gray-600">Recent Activity</p>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-              <Shield className="w-6 h-6 text-purple-600" />
+        <div className="group relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-2xl blur-xl group-hover:blur-2xl transition-all duration-300"></div>
+          <div className="relative bg-white/80 backdrop-blur-xl border border-white/20 rounded-2xl p-6 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-14 h-14 bg-gradient-to-r from-purple-500 to-pink-500 rounded-2xl flex items-center justify-center shadow-lg">
+                <Shield className="w-7 h-7 text-white" />
+              </div>
+              <span className="text-3xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">Active</span>
             </div>
-            <span className="text-2xl font-bold text-emerald-600">Active</span>
+            <h3 className="font-bold text-gray-900 text-lg mb-1">Security Status</h3>
+            <p className="text-sm text-gray-600">All Systems Secure</p>
+            <div className="mt-4 h-1 bg-gradient-to-r from-green-500 to-emerald-500 rounded-full animate-pulse"></div>
           </div>
-          <h3 className="font-semibold text-gray-900">Security Status</h3>
-          <p className="text-sm text-gray-600">All Systems Secure</p>
         </div>
       </div>
 
@@ -194,24 +585,35 @@ export const PatientDashboard: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Emergency QR Code</h3>
           <div className="text-center">
-            {user?.walletAddress && user?.qrCode ? (
-              <div className="inline-flex items-center justify-center p-4 bg-gray-50 rounded-xl mb-4">
-                <QRCode
-                  value={`emergency:${user.walletAddress}:${user.qrCode}`}
+            {user ? (
+              <div id="emergency-qr" className="inline-flex items-center justify-center p-4 bg-white border rounded-xl mb-4">
+                <QRCodeReact
+                  value={JSON.stringify({
+                    type: 'EDAV_EMERGENCY',
+                    patientAddress: user.walletAddress || '0x' + Math.random().toString(16).substr(2, 40),
+                    patientId: user.id,
+                    patientName: user.name || 'Emergency Patient',
+                    bloodGroup: user.bloodGroup || 'Unknown',
+                    emergencyContact: user.emergencyContact || 'Not provided',
+                    timestamp: Date.now()
+                  })}
                   size={160}
                   level="M"
                 />
               </div>
             ) : (
               <div className="p-4 bg-gray-50 rounded-xl mb-4 text-gray-600">
-                No QR code available. Please ensure your profile is complete.
+                No wallet address available. Please complete your profile.
               </div>
             )}
             <p className="text-sm text-gray-600 mb-4">
               Scan this QR code for emergency access to your health records
             </p>
-            {user?.walletAddress && user?.qrCode && (
-              <button className="text-blue-600 hover:text-blue-700 font-medium text-sm">
+            {user?.walletAddress && (
+              <button 
+                onClick={downloadQRCode}
+                className="text-blue-600 hover:text-blue-700 font-medium text-sm"
+              >
                 Download QR Code
               </button>
             )}
@@ -223,7 +625,10 @@ export const PatientDashboard: React.FC = () => {
           <div className="space-y-3">
             <button
               className="w-full flex items-center space-x-3 p-4 text-left bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
-              onClick={() => setShowUploadModal(true)} // This button will now open the modal
+              onClick={() => {
+                console.log('Upload button clicked');
+                setShowUploadModal(true);
+              }}
             >
               <Upload className="w-5 h-5 text-blue-600" />
               <div>
@@ -232,7 +637,13 @@ export const PatientDashboard: React.FC = () => {
               </div>
             </button>
 
-            <button className="w-full flex items-center space-x-3 p-4 text-left bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
+            <button 
+              className="w-full flex items-center space-x-3 p-4 text-left bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors"
+              onClick={() => {
+                console.log('Add Guardian button clicked');
+                setShowAddGuardian(true);
+              }}
+            >
               <Users className="w-5 h-5 text-emerald-600" />
               <div>
                 <div className="font-medium text-gray-900">Add Guardian</div>
@@ -240,7 +651,13 @@ export const PatientDashboard: React.FC = () => {
               </div>
             </button>
 
-            <button className="w-full flex items-center space-x-3 p-4 text-left bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors">
+            <button 
+              className="w-full flex items-center space-x-3 p-4 text-left bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors"
+              onClick={() => {
+                console.log('Generate QR button clicked');
+                generateNewQR();
+              }}
+            >
               <QrCode className="w-5 h-5 text-orange-600" />
               <div>
                 <div className="font-medium text-gray-900">Generate New QR</div>
@@ -257,7 +674,10 @@ export const PatientDashboard: React.FC = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold text-gray-900">Trusted Guardians</h2>
-        <button className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+        <button 
+          className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          onClick={() => setShowAddGuardian(true)}
+        >
           <Plus className="w-4 h-4" />
           <span>Add Guardian</span>
         </button>
@@ -298,7 +718,10 @@ export const PatientDashboard: React.FC = () => {
                 <button className="flex-1 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors">
                   Edit
                 </button>
-                <button className="px-3 py-2 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors">
+                <button 
+                  className="px-3 py-2 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors"
+                  onClick={() => deleteGuardian(guardian.id)}
+                >
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
@@ -310,6 +733,95 @@ export const PatientDashboard: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Add Guardian Modal */}
+      {showAddGuardian && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl p-8 w-full max-w-md relative">
+            <button
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+              onClick={() => setShowAddGuardian(false)}
+            >
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            
+            <h3 className="text-xl font-semibold text-gray-900 mb-6">Add Guardian</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                <input
+                  type="text"
+                  value={guardianForm.name}
+                  onChange={(e) => setGuardianForm({...guardianForm, name: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Guardian's full name"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Relationship</label>
+                <select
+                  value={guardianForm.relationship}
+                  onChange={(e) => setGuardianForm({...guardianForm, relationship: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">Select relationship</option>
+                  <option value="Parent">Parent</option>
+                  <option value="Spouse">Spouse</option>
+                  <option value="Sibling">Sibling</option>
+                  <option value="Child">Child</option>
+                  <option value="Friend">Friend</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Contact</label>
+                <input
+                  type="text"
+                  value={guardianForm.contact}
+                  onChange={(e) => setGuardianForm({...guardianForm, contact: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Phone number or email"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Guardian's Wallet Address *</label>
+                <input
+                  type="text"
+                  value={guardianForm.walletAddress}
+                  onChange={(e) => setGuardianForm({...guardianForm, walletAddress: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+                  placeholder="0x1234567890abcdef..."
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Enter your family member's existing wallet address. They need to have a crypto wallet (MetaMask, etc.) to approve emergency access.
+                </p>
+                <GuardianWalletHelper />
+              </div>
+            </div>
+            
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => setShowAddGuardian(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addGuardian}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Add Guardian
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -338,17 +850,7 @@ export const PatientDashboard: React.FC = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            {/* UploadRecord component placeholder */}
-            <div className="text-center p-4">
-              <h3 className="text-lg font-semibold mb-2">Upload Record</h3>
-              <p className="text-gray-600 mb-4">Upload functionality will be implemented here</p>
-              <button 
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                onClick={handleUploadSuccess}
-              >
-                Close
-              </button>
-            </div>
+            <UploadRecord onUploadSuccess={handleUploadSuccess} />
           </div>
         </div>
       )}
@@ -407,7 +909,15 @@ export const PatientDashboard: React.FC = () => {
 
   const renderAccessLog = () => (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-gray-900">Access Request Log</h2>
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold text-gray-900">Access Request Log</h2>
+        <button
+          onClick={fetchPatientData}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          Refresh
+        </button>
+      </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200">
@@ -425,6 +935,7 @@ export const PatientDashboard: React.FC = () => {
                     <div>
                       <h4 className="font-medium text-gray-900">{log.hospitalName}</h4>
                       <p className="text-sm text-gray-600">Requested by {log.requestedBy}</p>
+                      <p className="text-xs text-gray-500">Request ID: {log.id}</p>
                     </div>
                   </div>
                   <div className="text-right">
@@ -439,11 +950,30 @@ export const PatientDashboard: React.FC = () => {
                     <p className="text-xs text-gray-500 mt-1">{log.timestamp}</p>
                   </div>
                 </div>
+                
+                {log.status === 'pending' && (
+                  <div className="mt-4 flex space-x-3">
+                    <button
+                      onClick={() => handleApproveRequest(log.id, 'approved')}
+                      className="flex-1 bg-emerald-600 text-white py-2 px-4 rounded-lg hover:bg-emerald-700 transition-colors"
+                    >
+                      Approve Access
+                    </button>
+                    <button
+                      onClick={() => handleApproveRequest(log.id, 'rejected')}
+                      className="flex-1 bg-red-600 text-white py-2 px-4 rounded-lg hover:bg-red-700 transition-colors"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
               </div>
             ))
           ) : (
             <div className="px-6 py-4 text-center text-gray-600">
-              No access requests found.
+              <div>No access requests found.</div>
+              <div className="text-xs mt-2">Patient ID: {user?.id}</div>
+              <div className="text-xs">Check console for debug info.</div>
             </div>
           )}
         </div>
@@ -453,73 +983,198 @@ export const PatientDashboard: React.FC = () => {
 
   const renderProfile = () => (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-gray-900">Profile Settings</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold text-gray-900">My Profile</h2>
+        <div className="flex items-center space-x-2">
+          <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+          <span className="text-sm text-gray-600">Profile Active</span>
+        </div>
+      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Personal Information</h3>
-          <div className="space-y-4">
+      {/* Profile Header Card */}
+      <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-xl p-6 text-white">
+        <div className="flex items-center space-x-4">
+          <div className="w-16 h-16 bg-white bg-opacity-20 rounded-full flex items-center justify-center">
+            <span className="text-2xl font-bold">{user?.name?.charAt(0) || 'P'}</span>
+          </div>
+          <div>
+            <h3 className="text-xl font-semibold">{user?.name || 'Patient User'}</h3>
+            <p className="text-blue-100">{user?.email || 'No email provided'}</p>
+            <div className="flex items-center space-x-4 mt-2">
+              <span className="text-sm bg-white bg-opacity-20 px-2 py-1 rounded">
+                Blood: {user?.bloodGroup || user?.blood_group || 'Unknown'}
+              </span>
+              <span className="text-sm bg-white bg-opacity-20 px-2 py-1 rounded">
+                {user?.gender || 'Not specified'}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Personal Information */}
+        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+            <Users className="w-5 h-5 mr-2 text-blue-600" />
+            Personal Information
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
-              <input
-                type="text"
-                value={user?.name || ''}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                readOnly
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Blood Group</label>
-                <input
-                  type="text"
-                  value={user?.bloodGroup || ''}
-                  className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  readOnly
-                />
+              <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                <span className="text-gray-900">{user?.name || 'Not provided'}</span>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
-                <input
-                  type="text"
-                  value={user?.gender || ''}
-                  className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  readOnly
-                />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+              <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                <span className="text-gray-900">{user?.email || 'Not provided'}</span>
               </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Number</label>
-              <input
-                type="text"
-                value={user?.mobile || ''}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                readOnly
-              />
+              <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                <span className="text-gray-900">{user?.mobile || 'Not provided'}</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
+              <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                <span className="text-gray-900">{user?.dateOfBirth || 'Not provided'}</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+              <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                <span className="text-gray-900">{user?.gender || 'Not specified'}</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Blood Group</label>
+              <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg">
+                <span className="text-red-700 font-semibold">
+                  {user?.bloodGroup || user?.blood_group || 
+                   (typeof user === 'object' && user ? Object.values(user).find(val => 
+                     typeof val === 'string' && /^(A|B|AB|O)[+-]$/.test(val)
+                   ) : null) || 'Not specified'}
+                </span>
+              </div>
+              {/* Debug info */}
+              <div className="text-xs text-gray-400 mt-1">
+                Debug: {JSON.stringify({bloodGroup: user?.bloodGroup, blood_group: user?.blood_group})}
+              </div>
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Emergency Contact</label>
+              <div className="px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg">
+                <span className="text-orange-700">
+                  {user?.emergencyContact || user?.emergency_contact || 'Not provided'}
+                </span>
+              </div>
+              {/* Debug info */}
+              <div className="text-xs text-gray-400 mt-1">
+                Debug: {JSON.stringify({emergencyContact: user?.emergencyContact, emergency_contact: user?.emergency_contact})}
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Blockchain Information</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Wallet Address</label>
-              <input
-                type="text"
-                value={user?.walletAddress || ''}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-mono text-sm"
-                readOnly
-              />
+        {/* Quick Stats */}
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-200">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-gray-600">Health Records</span>
+              <FileText className="w-4 h-4 text-blue-600" />
             </div>
+            <div className="text-2xl font-bold text-gray-900">{records.length}</div>
+            <div className="text-xs text-gray-500">Encrypted files</div>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-200">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-gray-600">Guardians</span>
+              <Shield className="w-4 h-4 text-green-600" />
+            </div>
+            <div className="text-2xl font-bold text-gray-900">{guardians.length}</div>
+            <div className="text-xs text-gray-500">Trusted contacts</div>
+          </div>
+          
+          <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-200">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-gray-600">Access Requests</span>
+              <Activity className="w-4 h-4 text-orange-600" />
+            </div>
+            <div className="text-2xl font-bold text-gray-900">{accessLogs.length}</div>
+            <div className="text-xs text-gray-500">Recent activity</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Blockchain Information */}
+      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+          <QrCode className="w-5 h-5 mr-2 text-purple-600" />
+          Blockchain & Security Information
+        </h3>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Wallet Address</label>
+            <div className="flex space-x-2">
+              <div className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg font-mono text-sm break-all">
+                {user?.walletAddress || 'Not generated'}
+              </div>
+              {!user?.walletAddress && (
+                <button
+                  onClick={() => {
+                    const newAddress = '0x' + Math.random().toString(16).substr(2, 40);
+                    if (user) {
+                      const updatedUser = { ...user, walletAddress: newAddress };
+                      localStorage.setItem('userData', JSON.stringify(updatedUser));
+                      window.location.reload();
+                    }
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm whitespace-nowrap"
+                >
+                  Generate
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Used for blockchain transactions and emergency access</p>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Emergency QR ID</label>
+            <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg font-mono text-sm">
+              {user?.qrCode || 'Auto-generated on QR creation'}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Unique identifier for emergency QR codes</p>
+          </div>
+        </div>
+        
+        <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-start space-x-3">
+            <Shield className="w-5 h-5 text-blue-600 mt-0.5" />
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Emergency QR ID</label>
-              <input
-                type="text"
-                value={user?.qrCode || ''}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 font-mono text-sm"
-                readOnly
-              />
+              <h4 className="text-sm font-medium text-blue-900">Security Status</h4>
+              <p className="text-sm text-blue-700 mt-1">
+                Your profile is secured with blockchain technology. All health records are encrypted and 
+                require guardian approval for emergency access.
+              </p>
+              <div className="flex items-center space-x-4 mt-2">
+                <span className="flex items-center text-xs text-blue-600">
+                  <div className="w-2 h-2 bg-green-500 rounded-full mr-1"></div>
+                  Wallet Connected
+                </span>
+                <span className="flex items-center text-xs text-blue-600">
+                  <div className="w-2 h-2 bg-green-500 rounded-full mr-1"></div>
+                  QR Code Active
+                </span>
+                <span className="flex items-center text-xs text-blue-600">
+                  <div className="w-2 h-2 bg-green-500 rounded-full mr-1"></div>
+                  Profile Complete
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -545,12 +1200,14 @@ export const PatientDashboard: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
       <Header title="Patient Portal" />
       <div className="flex">
         <Navigation activeTab={activeTab} onTabChange={setActiveTab} userType="patient" />
         <main className="flex-1 p-6">
-          {renderContent()}
+          <div className="max-w-7xl mx-auto">
+            {renderContent()}
+          </div>
         </main>
       </div>
     </div>

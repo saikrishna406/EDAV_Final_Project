@@ -3,6 +3,7 @@ import { Upload, FileText } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { patientAPI } from '../../services/api';
 import { supabase } from '../../supabase';
+import CryptoJS from 'crypto-js';
 
 
 
@@ -24,7 +25,7 @@ export const UploadRecord: React.FC<{ onUploadSuccess: () => void }> = ({ onUplo
   const generateEncryptionKey = () => {
     const newKey = CryptoJS.lib.WordArray.random(256 / 8).toString();
     setEncryptionKey(newKey);
-    alert("Generated Encryption Key (Store This Safely!): " + newKey); // REMOVE IN PRODUCTION
+    alert("Generated Encryption Key (Store This Safely!): " + newKey);
   };
 
   const handleUploadClick = () => {

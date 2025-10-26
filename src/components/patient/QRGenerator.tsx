@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { QrCode, Download } from 'lucide-react';
 import { patientAPI } from '../../services/api';
+import QRCodeReact from 'react-qr-code';
 
 interface QRGeneratorProps {
   patientAddress: string;
@@ -16,36 +17,69 @@ export const QRGenerator: React.FC<QRGeneratorProps> = ({ patientAddress, ipfsHa
   }, [patientAddress, ipfsHash]);
 
   const generateQR = async () => {
-    if (!patientAddress || !ipfsHash) return;
+    if (!patientAddress) {
+      // Generate QR with basic patient info if no IPFS hash
+      const qrData = JSON.stringify({
+        type: 'EDAV_EMERGENCY',
+        patientAddress,
+        ipfsHash: ipfsHash || 'emergency_access',
+        timestamp: Date.now()
+      });
+      setQrData(qrData);
+      return;
+    }
     
     setLoading(true);
     try {
-      const response = await patientAPI.generateQR(patientAddress, ipfsHash);
+      const response = await patientAPI.generateQR(patientAddress, ipfsHash || 'emergency_access');
       if (response.success) {
         setQrData(response.qrData);
+      } else {
+        // Fallback to local generation
+        const fallbackQrData = JSON.stringify({
+          type: 'EDAV_EMERGENCY',
+          patientAddress,
+          ipfsHash: ipfsHash || 'emergency_access',
+          timestamp: Date.now()
+        });
+        setQrData(fallbackQrData);
       }
     } catch (error) {
       console.error('QR generation failed:', error);
+      // Fallback to local generation
+      const fallbackQrData = JSON.stringify({
+        type: 'EDAV_EMERGENCY',
+        patientAddress,
+        ipfsHash: ipfsHash || 'emergency_access',
+        timestamp: Date.now()
+      });
+      setQrData(fallbackQrData);
     } finally {
       setLoading(false);
     }
   };
 
   const downloadQR = () => {
+    if (!qrData) return;
+    
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     canvas.width = 300;
-    canvas.height = 300;
+    canvas.height = 350;
     ctx.fillStyle = 'white';
-    ctx.fillRect(0, 0, 300, 300);
+    ctx.fillRect(0, 0, 300, 350);
     ctx.fillStyle = 'black';
-    ctx.font = '12px monospace';
-    ctx.fillText('EDAV Emergency QR', 10, 20);
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('EDAV Emergency QR', 150, 30);
+    ctx.font = '12px Arial';
+    ctx.fillText('Patient: ' + patientAddress.substring(0, 10) + '...', 150, 320);
+    ctx.fillText('Generated: ' + new Date().toLocaleDateString(), 150, 340);
     
     const link = document.createElement('a');
-    link.download = 'emergency-qr.png';
+    link.download = 'edav-emergency-qr.png';
     link.href = canvas.toDataURL();
     link.click();
   };
@@ -69,8 +103,8 @@ export const QRGenerator: React.FC<QRGeneratorProps> = ({ patientAddress, ipfsHa
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
           </div>
         ) : qrData ? (
-          <div className="inline-block p-4 bg-gray-100 rounded-lg">
-            <QrCode className="w-32 h-32 text-gray-600 mx-auto" />
+          <div className="inline-block p-4 bg-white rounded-lg border">
+            <QRCodeReact value={qrData} size={200} />
             <p className="text-xs text-gray-500 mt-2">Emergency Access QR</p>
           </div>
         ) : (

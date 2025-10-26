@@ -27,6 +27,17 @@ router.post('/register', async (req, res) => {
   try {
     const { patientAddress, ipfsHash, guardianAddresses } = req.body;
     
+    // Check if blockchain is configured
+    if (process.env.CONTRACT_ADDRESS === 'your_deployed_contract_address') {
+      // Mock response for development
+      res.json({
+        success: true,
+        transactionHash: '0x' + Math.random().toString(16).substr(2, 64),
+        message: 'Mock registration - blockchain not configured'
+      });
+      return;
+    }
+    
     const txHash = await registerPatient(patientAddress, ipfsHash, guardianAddresses);
     
     res.json({
@@ -76,6 +87,54 @@ router.post('/generate-qr', async (req, res) => {
     res.json({
       success: true,
       qrData: JSON.stringify(qrData)
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Add guardian
+router.post('/add-guardian', async (req, res) => {
+  try {
+    const { patientId, name, walletAddress, relationship, contact } = req.body;
+    
+    if (!patientId || !name || !walletAddress) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Patient ID, name, and wallet address are required' 
+      });
+    }
+    
+    // In a real implementation, you would save to database
+    // For now, return success response
+    res.json({
+      success: true,
+      guardian: {
+        id: Date.now().toString(),
+        patientId,
+        name,
+        walletAddress,
+        relationship,
+        contact,
+        isActive: true,
+        createdAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get guardians for patient
+router.get('/guardians/:patientId', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    
+    // In a real implementation, you would fetch from database
+    // For now, return empty array
+    res.json({
+      success: true,
+      guardians: []
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

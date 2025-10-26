@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = 'http://localhost:5002/api';
 
 export const patientAPI = {
   generateWallet: async () => {
@@ -35,6 +35,36 @@ export const patientAPI = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ patientAddress, ipfsHash })
+    });
+    return response.json();
+  },
+
+  addGuardian: async (patientId: string, guardianData: any) => {
+    const response = await fetch(`${API_BASE_URL}/patient/add-guardian`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patientId, ...guardianData })
+    });
+    return response.json();
+  },
+
+  getGuardians: async (patientId: string) => {
+    const response = await fetch(`${API_BASE_URL}/patient/guardians/${patientId}`);
+    return response.json();
+  }
+};
+
+export const guardianAPI = {
+  getPendingRequests: async (guardianAddress: string) => {
+    const response = await fetch(`${API_BASE_URL}/guardian/pending-requests/${guardianAddress}`);
+    return response.json();
+  },
+
+  approveAccess: async (requestId: string, guardianPrivateKey: string) => {
+    const response = await fetch(`${API_BASE_URL}/guardian/approve-access`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId, guardianPrivateKey })
     });
     return response.json();
   }

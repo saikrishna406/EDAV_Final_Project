@@ -1,45 +1,61 @@
 const crypto = require('crypto');
+const axios = require('axios');
+const FormData = require('form-data');
 
-let client;
+const PINATA_API_URL = 'https://api.pinata.cloud';
 
-const initIPFS = async () => {
-  if (!client) {
-    const { create } = await import('@web3-storage/w3up-client');
-    client = await create();
-    // You'll need to authenticate with Web3.Storage
-    // Follow their docs for proper authentication
+const initIPFS = () => {
+  if (!process.env.PINATA_API_KEY || !process.env.PINATA_SECRET_KEY) {
+    throw new Error('Pinata API credentials not found. Please set PINATA_API_KEY and PINATA_SECRET_KEY in .env');
   }
-  return client;
+  return {
+    apiKey: process.env.PINATA_API_KEY,
+    secretKey: process.env.PINATA_SECRET_KEY
+  };
 };
 
 const encryptData = (data, key) => {
-  const cipher = crypto.createCipher('aes-256-cbc', key);
+  const iv = crypto.randomBytes(16);
+  const keyHash = crypto.createHash('sha256').update(key).digest();
+  const cipher = crypto.createCipheriv('aes-256-cbc', keyHash, iv);
   let encrypted = cipher.update(data, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  return encrypted;
+  return iv.toString('hex') + ':' + encrypted;
 };
 
 const decryptData = (encryptedData, key) => {
-  const decipher = crypto.createDecipher('aes-256-cbc', key);
-  let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+  const parts = encryptedData.split(':');
+  const iv = Buffer.from(parts[0], 'hex');
+  const encrypted = parts[1];
+  const keyHash = crypto.createHash('sha256').update(key).digest();
+  const decipher = crypto.createDecipheriv('aes-256-cbc', keyHash, iv);
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;
 };
 
 const uploadToIPFS = async (fileBuffer, fileName, encryptionKey) => {
   try {
-    await initIPFS();
+    const { apiKey, secretKey } = initIPFS();
     
     // Encrypt the file
     const encryptedData = encryptData(fileBuffer.toString('base64'), encryptionKey);
     
-    // Create a File object
-    const file = new File([encryptedData], fileName, { type: 'application/octet-stream' });
+    // Create form data
+    const formData = new FormData();
+    formData.append('file', Buffer.from(encryptedData), fileName);
     
-    // Upload to IPFS
-    const cid = await client.uploadFile(file);
+    // Upload to Pinata
+    console.log('📤 Uploading to IPFS via Pinata:', fileName);
+    const response = await axios.post(`${PINATA_API_URL}/pinning/pinFileToIPFS`, formData, {
+      headers: {
+        ...formData.getHeaders(),
+        'pinata_api_key': apiKey,
+        'pinata_secret_api_key': secretKey
+      }
+    });
     
-    return cid.toString();
+    return response.data.IpfsHash;
   } catch (error) {
     throw new Error(`IPFS upload failed: ${error.message}`);
   }
@@ -47,13 +63,13 @@ const uploadToIPFS = async (fileBuffer, fileName, encryptionKey) => {
 
 const downloadFromIPFS = async (cid, encryptionKey) => {
   try {
-    await initIPFS();
+    // Download from IPFS gateway
+    console.log('📥 Downloading from IPFS:', cid);
+    const response = await axios.get(`https://gateway.pinata.cloud/ipfs/${cid}`, {
+      responseType: 'text'
+    });
     
-    // Download from IPFS
-    const res = await client.get(cid);
-    const files = await res.files();
-    const file = files[0];
-    const encryptedData = await file.text();
+    const encryptedData = response.data;
     
     // Decrypt the data
     const decryptedData = decryptData(encryptedData, encryptionKey);
