@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Header } from '../common/Header';
 import { Navigation } from '../common/Navigation';
 import { QRScanner } from './QRScanner';
-import { QrCode, Scan, AlertTriangle, Clock, CheckCircle, XCircle, Eye, FileText, Wallet } from 'lucide-react';
+import { Scan, AlertTriangle, Clock, CheckCircle, XCircle, Eye, FileText, Wallet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { hospitalAPI } from '../../services/api';
 import { supabase } from '../../supabase';

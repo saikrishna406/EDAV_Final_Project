@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Shield, Mail, Lock, Fingerprint, QrCode } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../supabase';
-import { User } from '../../types';
+
 
 export const PatientLogin: React.FC = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -67,7 +67,7 @@ export const PatientLogin: React.FC = () => {
           emergencyContact: patientData.emergency_contact || '',
           qrCode: patientData.qr_code || '',
         };
-        await authContextLogin(data.user.id, mappedUser, 'patient');
+        await authContextLogin(data.user.id, mappedUser as any, 'patient');
       } else {
         const minimalUser = {
           id: data.user.id,

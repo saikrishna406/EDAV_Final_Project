@@ -50,7 +50,8 @@ interface AccessLog {
 
 export const PatientDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
+  const authLoading = false;
 
   // State for actual data, initialized to empty arrays
   const [guardians, setGuardians] = useState<Guardian[]>([]);
@@ -463,6 +464,23 @@ export const PatientDashboard: React.FC = () => {
       </div>
     );
   }
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return renderDashboard();
+      case 'family':
+        return renderFamily();
+      case 'records':
+        return renderRecords();
+      case 'access-log':
+        return renderAccessLog();
+      case 'profile':
+        return renderProfile();
+      default:
+        return renderDashboard();
+    }
+  };
 
   // If there was a fetch error after initial load, display it.
   if (fetchError) {

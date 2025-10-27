@@ -47,7 +47,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setUserType(savedUserType as 'patient' | 'hospital');
         setIsAuthenticated(true);
         console.log('Restored user data from localStorage:', userData);
-      console.log('Blood group from localStorage:', userData.bloodGroup || userData.blood_group);
+      console.log('Blood group from localStorage:', (userData as any).bloodGroup || (userData as any).blood_group);
       } catch (error) {
         console.error('Failed to restore user data:', error);
         localStorage.clear();
@@ -60,7 +60,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = async (uid: string, userData: User | Hospital, type: 'patient' | 'hospital') => {
     try {
       console.log('Setting user data:', { uid, userData, type });
-      console.log('Blood group in userData:', userData.bloodGroup || userData.blood_group);
+      console.log('Blood group in userData:', (userData as any).bloodGroup || (userData as any).blood_group);
       
       // Try to save to Supabase, but don't fail if it doesn't work
       try {

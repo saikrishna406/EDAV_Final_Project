@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText } from 'lucide-react';
+import { Upload } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { patientAPI } from '../../services/api';
 import { supabase } from '../../supabase';
@@ -32,7 +32,7 @@ export const UploadRecord: React.FC<{ onUploadSuccess: () => void }> = ({ onUplo
     fileInputRef.current?.click();
   };
 
-  const uploadToIPFS = async (file: File, key: string) => {
+  const uploadToIPFS = async (file: File, _key: string) => {
     if (!user || !user.id) {
       setUploadError("User not logged in.");
       return;
