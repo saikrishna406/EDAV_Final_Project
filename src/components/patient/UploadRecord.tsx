@@ -41,30 +41,100 @@ export const UploadRecord: React.FC<{ onUploadSuccess: () => void }> = ({ onUplo
     setUploading(true);
     setUploadError(null);
 
+    // Read file as array buffer and encrypt it first
+    const arrayBuffer = await file.arrayBuffer();
+    const fileData = new Uint8Array(arrayBuffer);
+    
+    // Encrypt file data
+    const encrypted = CryptoJS.AES.encrypt(
+      CryptoJS.lib.WordArray.create(fileData), 
+      key
+    ).toString();
+    
     try {
-      const response = await patientAPI.uploadRecord(file, user.id);
+      // Create encrypted file blob
+      const encryptedBlob = new Blob([encrypted], { type: 'text/plain' });
       
-      if (response.success) {
-
-
-        await supabase.from('health_records').insert({
+      // Upload to Pinata IPFS
+      const formData = new FormData();
+      formData.append('file', encryptedBlob, `encrypted_${file.name}`);
+      
+      const metadata = JSON.stringify({
+        name: `encrypted_${file.name}`,
+        keyvalues: {
           patient_id: user.id,
-          name: response.fileName,
+          original_name: file.name,
+          encrypted: 'true'
+        }
+      });
+      formData.append('pinataMetadata', metadata);
+      
+      const pinataResponse = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_PINATA_JWT}`
+        },
+        body: formData
+      });
+      
+      console.log('Pinata response status:', pinataResponse.status);
+      
+      console.log('Pinata response status:', pinataResponse.status);
+      
+      if (!pinataResponse.ok) {
+        const errorText = await pinataResponse.text();
+        console.error('Pinata error response:', errorText);
+        throw new Error(`Failed to upload to IPFS: ${pinataResponse.status} - ${errorText}`);
+      }
+      
+      const responseText = await pinataResponse.text();
+      console.log('Pinata raw response:', responseText);
+      
+      let pinataData;
+      try {
+        pinataData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('Failed to parse Pinata response:', parseError);
+        throw new Error('Invalid response from Pinata');
+      }
+      
+      const ipfsHash = pinataData.IpfsHash;
+      if (!ipfsHash) {
+        console.error('No IPFS hash in response:', pinataData);
+        throw new Error('No IPFS hash returned from Pinata');
+      }
+      
+      console.log('Successfully uploaded to IPFS:', ipfsHash);
+      
+      // Store record in database with IPFS hash and encryption key
+      try {
+        const { error: dbError } = await supabase.from('health_records').insert({
+          patient_id: user.id,
+          name: file.name,
           type: file.type,
           upload_date: new Date().toISOString(),
-          ipfs_cid: response.ipfsHash,
+          ipfs_cid: ipfsHash,
+          encryption_key: key,
           is_encrypted: true,
-          size: `${(response.size / (1024 * 1024)).toFixed(2)} MB`,
+          size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
         });
-        setSelectedFile(null);
-        setEncryptionKey('');
-        onUploadSuccess();
-      } else {
-        setUploadError(response.error || 'Upload failed');
+        
+        if (dbError) {
+          console.warn('Database storage failed:', dbError);
+          // Continue without throwing error since IPFS upload succeeded
+        }
+      } catch (dbErr) {
+        console.warn('Database metadata storage failed:', dbErr);
+        // Continue without throwing error since IPFS upload succeeded
       }
+      
+      setSelectedFile(null);
+      setEncryptionKey('');
+      alert(`File encrypted and uploaded to IPFS successfully!\nIPFS Hash: ${ipfsHash}`);
+      onUploadSuccess();
     } catch (err: any) {
-      console.error('File upload error:', err);
-      setUploadError(err.message || 'Failed to upload file.');
+      console.error('IPFS upload failed:', err);
+      setUploadError(`IPFS upload failed: ${err.message}. Please check your Pinata configuration.`);
     } finally {
       setUploading(false);
     }

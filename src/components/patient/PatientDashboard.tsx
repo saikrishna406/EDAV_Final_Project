@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from '../common/Header';
 import { Navigation } from '../common/Navigation';
-import { QrCode, Upload, Users, FileText, Activity, Shield, Plus, Eye, Trash2 } from 'lucide-react';
+import { QrCode, Upload, Users, FileText, Activity, Shield, Plus, Eye, Trash2, Wallet } from 'lucide-react';
 import { GuardianWalletHelper } from './GuardianWalletHelper';
 import { useAuth } from '../../context/AuthContext';
 import QRCodeReact from 'react-qr-code';
 import { UploadRecord } from './UploadRecord';
 import { patientAPI, guardianAPI } from '../../services/api';
 import { supabase } from '../../supabase';
+import { useMetaMask } from '../../hooks/useMetaMask';
+import { useContract } from '../../hooks/useContract';
 
 
 
@@ -59,6 +61,9 @@ export const PatientDashboard: React.FC = () => {
 
   // New state for controlling the visibility of the UploadRecord modal
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const { isConnected, account, connectWallet, disconnectWallet, isLoading: walletLoading, error: walletError } = useMetaMask();
+  const { registerPatient, loading: contractLoading, isReady: contractReady } = useContract();
+  const [blockchainStatus, setBlockchainStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
 
   // --- Data Fetching Logic ---
   const fetchPatientData = async () => {
@@ -128,36 +133,19 @@ export const PatientDashboard: React.FC = () => {
       try {
         console.log('=== PATIENT DEBUG ACCESS REQUESTS ===');
         console.log('Current patient ID:', user.id);
-        console.log('Patient name:', user.name);
         
-        // Check all access requests
-        const { data: allRequests, error: allError } = await supabase
-          .from('access_requests')
-          .select('*');
-        
-        console.log('All requests in DB:', allRequests);
-        console.log('All requests error:', allError);
-        
-        if (allRequests && allRequests.length > 0) {
-          console.log('Found', allRequests.length, 'total requests');
-          allRequests.forEach(req => {
-            console.log('Request patient_id:', req.patient_id, 'matches current?', req.patient_id === user.id);
-          });
-        } else {
-          console.log('NO ACCESS REQUESTS FOUND IN DATABASE AT ALL');
-        }
-        
-        // Then check for this specific patient
-        // Direct query for access requests
-        const { data: accessData, error: accessError } = await supabase
-          .from('access_requests')
-          .select('*')
-          .eq('patient_id', user.id)
-          .order('created_at', { ascending: false });
-        
-        console.log('Patient-specific query result:', accessData);
-        
-        if (accessData && accessData.length > 0) {
+        // Try database first (non-blocking)
+        try {
+          const { data: accessData, error: accessError } = await supabase
+            .from('access_requests')
+            .select('*')
+            .eq('patient_id', user.id)
+            .order('created_at', { ascending: false });
+          
+          if (accessError) {
+            console.warn('Database access failed, using empty data:', accessError);
+            setAccessLogs([]);
+          } else if (accessData && accessData.length > 0) {
           const formattedLogs = accessData.map(request => ({
             id: request.id,
             patientId: request.patient_id,
@@ -169,10 +157,12 @@ export const PatientDashboard: React.FC = () => {
             status: request.status,
             guardianApprovals: []
           }));
-          console.log('Formatted access logs:', formattedLogs);
-          setAccessLogs(formattedLogs);
-        } else {
-          console.log('No access requests found for patient');
+            setAccessLogs(formattedLogs);
+          } else {
+            setAccessLogs([]);
+          }
+        } catch (dbError) {
+          console.warn('Database connection failed, using empty data:', dbError);
           setAccessLogs([]);
         }
       } catch (error) {
@@ -289,20 +279,39 @@ export const PatientDashboard: React.FC = () => {
         return;
       }
 
-      // Database insert successful
-      console.log('Guardian added to database successfully');
+      // Update local state first
+      const updatedGuardians = [...guardians, newGuardian];
+      setGuardians(updatedGuardians);
       
-      // Also try to add via API for blockchain integration
-      try {
-        await patientAPI.addGuardian(user.id, guardianForm);
-      } catch (apiError) {
-        console.warn('API guardian add failed:', apiError);
+      // Register patient on blockchain if connected and has enough guardians
+      let blockchainTx = null;
+      if (isConnected && contractReady && updatedGuardians.length >= 2) {
+        try {
+          setBlockchainStatus('pending');
+          const guardianAddresses = updatedGuardians.map(g => g.walletAddress);
+          blockchainTx = await registerPatient(account!, 'patient-records-hash', guardianAddresses);
+          if (blockchainTx) {
+            setBlockchainStatus('success');
+          }
+        } catch (blockchainError) {
+          console.error('Blockchain registration failed:', blockchainError);
+          setBlockchainStatus('error');
+        }
       }
       
-      setGuardians([...guardians, newGuardian]);
       setGuardianForm({ name: '', relationship: '', contact: '', walletAddress: '' });
       setShowAddGuardian(false);
-      alert('Guardian added successfully to database!');
+      
+      // Show transaction feedback
+      if (blockchainTx) {
+        alert(`Guardian added successfully! Patient registered on blockchain.\nTransaction: ${blockchainTx.hash}`);
+      } else if (isConnected && contractReady && updatedGuardians.length < 2) {
+        alert('Guardian added to database. Need 2+ guardians for blockchain registration.');
+      } else if (!isConnected) {
+        alert('Guardian added to database. Connect MetaMask for blockchain features.');
+      } else {
+        alert('Guardian added to database only.');
+      }
     } catch (error: any) {
       console.error('Error adding guardian:', error);
       if (error.message?.includes('duplicate')) {
@@ -480,6 +489,30 @@ export const PatientDashboard: React.FC = () => {
 
   const renderDashboard = () => (
     <div className="space-y-8">
+      {/* MetaMask Connection Banner */}
+      {!isConnected && (
+        <div className="bg-gradient-to-r from-orange-50 to-yellow-50 border border-orange-200 rounded-xl p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <Wallet className="w-6 h-6 text-orange-600" />
+              <div>
+                <h3 className="font-semibold text-orange-800">Connect MetaMask Wallet</h3>
+                <p className="text-sm text-orange-700">Connect your wallet for enhanced security and blockchain features</p>
+              </div>
+            </div>
+            <button
+              onClick={connectWallet}
+              disabled={walletLoading}
+              className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50"
+            >
+              {walletLoading ? 'Connecting...' : 'Connect Wallet'}
+            </button>
+          </div>
+          {walletError && (
+            <p className="text-sm text-red-600 mt-2">{walletError}</p>
+          )}
+        </div>
+      )}
       {/* Premium Welcome Banner */}
       <div className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 rounded-3xl"></div>
@@ -588,34 +621,33 @@ export const PatientDashboard: React.FC = () => {
             {user ? (
               <div id="emergency-qr" className="inline-flex items-center justify-center p-4 bg-white border rounded-xl mb-4">
                 <QRCodeReact
-                  value={JSON.stringify({
-                    type: 'EDAV_EMERGENCY',
-                    patientAddress: user.walletAddress || '0x' + Math.random().toString(16).substr(2, 40),
-                    patientId: user.id,
-                    patientName: user.name || 'Emergency Patient',
-                    bloodGroup: user.bloodGroup || 'Unknown',
-                    emergencyContact: user.emergencyContact || 'Not provided',
-                    timestamp: Date.now()
-                  })}
+                  value={`emergency:${isConnected ? account : (user.walletAddress || '0x' + Math.random().toString(16).substr(2, 40))}:${user.qr_code || user.id}`}
                   size={160}
                   level="M"
                 />
               </div>
             ) : (
               <div className="p-4 bg-gray-50 rounded-xl mb-4 text-gray-600">
-                No wallet address available. Please complete your profile.
+                No wallet address available. Please connect MetaMask.
               </div>
             )}
             <p className="text-sm text-gray-600 mb-4">
               Scan this QR code for emergency access to your health records
             </p>
-            {user?.walletAddress && (
-              <button 
-                onClick={downloadQRCode}
-                className="text-blue-600 hover:text-blue-700 font-medium text-sm"
-              >
-                Download QR Code
-              </button>
+            {(isConnected || user?.walletAddress) && (
+              <div className="space-y-2">
+                <button 
+                  onClick={downloadQRCode}
+                  className="block text-blue-600 hover:text-blue-700 font-medium text-sm"
+                >
+                  Download QR Code
+                </button>
+                {!isConnected && (
+                  <p className="text-xs text-yellow-600">
+                    Connect MetaMask for enhanced security
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -1122,25 +1154,29 @@ export const PatientDashboard: React.FC = () => {
             <label className="block text-sm font-medium text-gray-700 mb-2">Wallet Address</label>
             <div className="flex space-x-2">
               <div className="flex-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg font-mono text-sm break-all">
-                {user?.walletAddress || 'Not generated'}
+                {isConnected ? account : (user?.walletAddress || 'Not connected')}
               </div>
-              {!user?.walletAddress && (
+              {!isConnected ? (
                 <button
-                  onClick={() => {
-                    const newAddress = '0x' + Math.random().toString(16).substr(2, 40);
-                    if (user) {
-                      const updatedUser = { ...user, walletAddress: newAddress };
-                      localStorage.setItem('userData', JSON.stringify(updatedUser));
-                      window.location.reload();
-                    }
-                  }}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm whitespace-nowrap"
+                  onClick={connectWallet}
+                  disabled={walletLoading}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm whitespace-nowrap disabled:opacity-50"
                 >
-                  Generate
+                  {walletLoading ? 'Connecting...' : 'Connect MetaMask'}
+                </button>
+              ) : (
+                <button
+                  onClick={disconnectWallet}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm whitespace-nowrap"
+                >
+                  Disconnect
                 </button>
               )}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Used for blockchain transactions and emergency access</p>
+            <p className="text-xs text-gray-500 mt-1">Connect MetaMask for blockchain transactions and emergency access</p>
+            {walletError && (
+              <p className="text-xs text-red-600 mt-1">{walletError}</p>
+            )}
           </div>
           
           <div>
@@ -1163,8 +1199,8 @@ export const PatientDashboard: React.FC = () => {
               </p>
               <div className="flex items-center space-x-4 mt-2">
                 <span className="flex items-center text-xs text-blue-600">
-                  <div className="w-2 h-2 bg-green-500 rounded-full mr-1"></div>
-                  Wallet Connected
+                  <div className={`w-2 h-2 ${isConnected ? 'bg-green-500' : 'bg-red-500'} rounded-full mr-1`}></div>
+                  {isConnected ? `Wallet Connected (${account?.slice(0, 6)}...${account?.slice(-4)})` : 'Wallet Disconnected'}
                 </span>
                 <span className="flex items-center text-xs text-blue-600">
                   <div className="w-2 h-2 bg-green-500 rounded-full mr-1"></div>

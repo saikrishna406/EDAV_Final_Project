@@ -1,0 +1,80 @@
+{
+  "abi": [
+    {
+      "anonymous": false,
+      "inputs": [
+        {"indexed": true, "internalType": "uint256", "name": "requestId", "type": "uint256"},
+        {"indexed": true, "internalType": "address", "name": "guardian", "type": "address"}
+      ],
+      "name": "AccessApproved",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {"indexed": true, "internalType": "uint256", "name": "requestId", "type": "uint256"},
+        {"indexed": false, "internalType": "string", "name": "ipfsHash", "type": "string"}
+      ],
+      "name": "AccessGranted",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {"indexed": true, "internalType": "uint256", "name": "requestId", "type": "uint256"},
+        {"indexed": true, "internalType": "address", "name": "patient", "type": "address"},
+        {"indexed": true, "internalType": "address", "name": "hospital", "type": "address"}
+      ],
+      "name": "AccessRequested",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {"indexed": true, "internalType": "address", "name": "patient", "type": "address"},
+        {"indexed": false, "internalType": "string", "name": "ipfsHash", "type": "string"}
+      ],
+      "name": "PatientRegistered",
+      "type": "event"
+    },
+    {
+      "inputs": [{"internalType": "uint256", "name": "_requestId", "type": "uint256"}],
+      "name": "approveAccess",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [{"internalType": "address", "name": "_hospital", "type": "address"}],
+      "name": "authorizeHospital",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [{"internalType": "address", "name": "_patient", "type": "address"}],
+      "name": "getPatientGuardians",
+      "outputs": [{"internalType": "address[]", "name": "", "type": "address[]"}],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {"internalType": "address", "name": "_patient", "type": "address"},
+        {"internalType": "string", "name": "_ipfsHash", "type": "string"},
+        {"internalType": "address[]", "name": "_guardians", "type": "address[]"}
+      ],
+      "name": "registerPatient",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [{"internalType": "address", "name": "_patient", "type": "address"}],
+      "name": "requestAccess",
+      "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ]
+}

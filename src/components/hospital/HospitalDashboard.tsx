@@ -2,10 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Header } from '../common/Header';
 import { Navigation } from '../common/Navigation';
 import { QRScanner } from './QRScanner';
-import { QrCode, Scan, AlertTriangle, Clock, CheckCircle, XCircle, Eye, FileText } from 'lucide-react';
+import { QrCode, Scan, AlertTriangle, Clock, CheckCircle, XCircle, Eye, FileText, Wallet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { hospitalAPI } from '../../services/api';
 import { supabase } from '../../supabase';
+import { useMetaMask } from '../../hooks/useMetaMask';
+import { useContract } from '../../hooks/useContract';
+import CryptoJS from 'crypto-js';
 
 export const HospitalDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -16,6 +19,9 @@ export const HospitalDashboard: React.FC = () => {
   const [stats, setStats] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [selectedPatientRecords, setSelectedPatientRecords] = useState<any>(null);
   const { hospital } = useAuth();
+  const { isConnected, account, connectWallet, disconnectWallet, isLoading: walletLoading, error: walletError } = useMetaMask();
+  const { requestAccess, loading: contractLoading, isReady: contractReady } = useContract();
+  const [blockchainTxHash, setBlockchainTxHash] = useState<string | null>(null);
 
   useEffect(() => {
     loadAccessRequests();
@@ -61,6 +67,12 @@ export const HospitalDashboard: React.FC = () => {
               <QrCode className="w-4 h-4 text-blue-600" />
               <span className="text-sm text-gray-600">QR Scanner Ready</span>
             </div>
+            <div className="flex items-center space-x-2">
+              <Wallet className={`w-4 h-4 ${isConnected ? 'text-green-600' : 'text-gray-400'}`} />
+              <span className="text-sm text-gray-600">
+                {isConnected ? `Wallet: ${account?.slice(0, 6)}...${account?.slice(-4)}` : 'Wallet Disconnected'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -98,6 +110,60 @@ export const HospitalDashboard: React.FC = () => {
           <h3 className="font-semibold text-gray-900">Rejected</h3>
           <p className="text-sm text-gray-600">Access denied</p>
         </div>
+      </div>
+
+      {/* Blockchain Status Banner */}
+      <div className={`border rounded-xl p-4 mb-6 ${
+        isConnected && contractReady ? 'bg-green-50 border-green-200' :
+        isConnected ? 'bg-yellow-50 border-yellow-200' :
+        'bg-red-50 border-red-200'
+      }`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <Wallet className={`w-5 h-5 ${
+              isConnected && contractReady ? 'text-green-600' :
+              isConnected ? 'text-yellow-600' :
+              'text-red-600'
+            }`} />
+            <div>
+              <h3 className={`font-medium ${
+                isConnected && contractReady ? 'text-green-800' :
+                isConnected ? 'text-yellow-800' :
+                'text-red-800'
+              }`}>
+                {isConnected && contractReady ? 'Blockchain Ready' :
+                 isConnected ? 'Contract Not Available' :
+                 'MetaMask Required'}
+              </h3>
+              <p className={`text-sm ${
+                isConnected && contractReady ? 'text-green-700' :
+                isConnected ? 'text-yellow-700' :
+                'text-red-700'
+              }`}>
+                {isConnected && contractReady ? 'Full blockchain functionality available' :
+                 isConnected ? 'Database storage only - deploy contract for blockchain features' :
+                 'Connect wallet for blockchain emergency access requests'}
+              </p>
+            </div>
+          </div>
+          {!isConnected && (
+            <button
+              onClick={connectWallet}
+              disabled={walletLoading}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              {walletLoading ? 'Connecting...' : 'Connect Wallet'}
+            </button>
+          )}
+        </div>
+        {walletError && (
+          <p className="text-sm text-red-600 mt-2">{walletError}</p>
+        )}
+        {blockchainTxHash && (
+          <p className="text-sm text-green-600 mt-2 font-mono">
+            Last transaction: {blockchainTxHash}
+          </p>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-200">
@@ -147,56 +213,29 @@ export const HospitalDashboard: React.FC = () => {
 
   const viewHealthRecord = async (record: any) => {
     try {
-      console.log('Viewing record:', record);
+      console.log('Viewing actual uploaded record:', record);
       
-      // Get the correct MIME type based on file extension
       const mimeType = getMimeType(record.name);
-      console.log('Detected MIME type:', mimeType);
-      
-      // Get file data (decrypt if needed)
       const fileData = await getFileData(record);
+      
       if (fileData) {
-        const blob = new Blob([fileData], { type: mimeType });
-        const url = window.URL.createObjectURL(blob);
+        // Convert to base64 data URL
+        const uint8Array = new Uint8Array(fileData);
+        const base64String = btoa(String.fromCharCode(...uint8Array));
+        const dataUrl = `data:${mimeType};base64,${base64String}`;
         
-        console.log('Created blob URL:', url);
-        console.log('Blob size:', blob.size);
-        console.log('Blob type:', blob.type);
-        
-        // For PDFs, try to open directly
-        if (mimeType === 'application/pdf') {
-          const newWindow = window.open('', '_blank');
-          if (newWindow) {
-            newWindow.document.write(`
-              <html>
-                <head><title>${record.name}</title></head>
-                <body style="margin:0;padding:0;">
-                  <embed src="${url}" type="application/pdf" width="100%" height="100%" />
-                </body>
-              </html>
-            `);
-            newWindow.document.close();
-          }
-        } else {
-          // For other file types, open directly
-          const newWindow = window.open(url, '_blank');
-          if (newWindow) {
-            newWindow.document.title = record.name;
-          }
-        }
-        
-        // Clean up after 2 minutes
-        setTimeout(() => window.URL.revokeObjectURL(url), 120000);
+        // Open directly with data URL
+        window.open(dataUrl, '_blank');
       }
     } catch (error) {
       console.error('Error viewing record:', error);
-      alert('Error opening file: ' + error.message);
+      alert('File not found. Patient may not have uploaded this record yet.');
     }
   };
 
   const downloadHealthRecord = async (record: any) => {
     try {
-      console.log('Downloading record:', record);
+      console.log('Downloading actual uploaded record:', record);
       
       const mimeType = getMimeType(record.name);
       const fileData = await getFileData(record);
@@ -204,127 +243,70 @@ export const HospitalDashboard: React.FC = () => {
       if (fileData) {
         const blob = new Blob([fileData], { type: mimeType });
         const url = window.URL.createObjectURL(blob);
+        
         const a = document.createElement('a');
         a.href = url;
         a.download = record.name; // Use original filename
+        a.style.display = 'none';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
+        
+        setTimeout(() => window.URL.revokeObjectURL(url), 1000);
       }
     } catch (error) {
       console.error('Error downloading record:', error);
-      alert('Error downloading file: ' + error.message);
+      alert('File not found. Patient may not have uploaded this record yet.');
     }
   };
 
   const getFileData = async (record: any) => {
     try {
-      console.log('Getting file data for:', record);
+      console.log('Getting and decrypting file for record:', record);
       
-      // For demo purposes, create a simple PDF if no real file exists
-      if (!record.ipfs_cid && !record.file_path) {
-        console.log('Creating demo PDF content');
-        const pdfContent = `%PDF-1.4
-1 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
->>
-endobj
-
-2 0 obj
-<<
-/Type /Pages
-/Kids [3 0 R]
-/Count 1
->>
-endobj
-
-3 0 obj
-<<
-/Type /Page
-/Parent 2 0 R
-/MediaBox [0 0 612 792]
-/Contents 4 0 R
-/Resources <<
-/Font <<
-/F1 5 0 R
->>
->>
->>
-endobj
-
-4 0 obj
-<<
-/Length 44
->>
-stream
-BT
-/F1 12 Tf
-72 720 Td
-(Medical Record: ${record.name}) Tj
-ET
-endstream
-endobj
-
-5 0 obj
-<<
-/Type /Font
-/Subtype /Type1
-/BaseFont /Helvetica
->>
-endobj
-
-xref
-0 6
-0000000000 65535 f 
-0000000010 00000 n 
-0000000079 00000 n 
-0000000173 00000 n 
-0000000301 00000 n 
-0000000380 00000 n 
-
-trailer
-<<
-/Size 6
-/Root 1 0 R
->>
-startxref
-492
-%%EOF`;
-        return new TextEncoder().encode(pdfContent).buffer;
-      }
+      let encryptedData = null;
       
       // Try IPFS first
       if (record.ipfs_cid) {
-        console.log('Fetching from IPFS:', record.ipfs_cid);
-        const response = await fetch(`https://ipfs.io/ipfs/${record.ipfs_cid}`);
-        if (!response.ok) throw new Error('IPFS fetch failed');
-        return await response.arrayBuffer();
+        console.log('Fetching encrypted file from IPFS:', record.ipfs_cid);
+        try {
+          const response = await fetch(`https://gateway.pinata.cloud/ipfs/${record.ipfs_cid}`);
+          if (response.ok) {
+            encryptedData = await response.text();
+          }
+        } catch (ipfsError) {
+          console.warn('IPFS fetch failed:', ipfsError);
+        }
       }
       
-      // Try Supabase storage
-      const filePath = record.file_path || record.id;
-      console.log('Fetching from Supabase storage:', filePath);
-      
-      const { data, error } = await supabase.storage
-        .from('health-records')
-        .download(filePath);
-      
-      if (error) {
-        console.error('Supabase storage error:', error);
-        // Create demo content as fallback
-        const demoContent = `Demo medical record: ${record.name}\nType: ${record.type}\nDate: ${record.upload_date}`;
-        return new TextEncoder().encode(demoContent).buffer;
+      // Fallback to database storage
+      if (!encryptedData && record.file_data) {
+        console.log('Using encrypted data from database');
+        encryptedData = record.file_data;
       }
       
-      return await data.arrayBuffer();
+      if (encryptedData && record.encryption_key) {
+        console.log('Decrypting file with stored key');
+        
+        // Decrypt the file
+        const decrypted = CryptoJS.AES.decrypt(encryptedData, record.encryption_key);
+        const decryptedWordArray = decrypted.toString(CryptoJS.enc.Base64);
+        
+        // Convert back to array buffer
+        const binaryString = atob(decryptedWordArray);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        console.log('File decrypted successfully, size:', bytes.length);
+        return bytes.buffer;
+      }
+      
+      throw new Error(`Cannot decrypt file. Missing encrypted data or encryption_key.`);
     } catch (error) {
-      console.error('Error getting file data:', error);
-      // Create demo content as fallback
-      const demoContent = `Demo medical record: ${record.name}\nType: ${record.type}\nDate: ${record.upload_date}`;
-      return new TextEncoder().encode(demoContent).buffer;
+      console.error('Error getting/decrypting file data:', error);
+      throw error;
     }
   };
 
@@ -445,11 +427,31 @@ startxref
           console.log('Hospital ID:', hospital?.id);
           
           if (!error) {
-            // Wait a moment for database to update
+            let blockchainTx = null;
+            // Create blockchain request if connected
+            if (isConnected && contractReady) {
+              try {
+                blockchainTx = await requestAccess(patient.wallet_address || account!);
+                if (blockchainTx) {
+                  setBlockchainTxHash(blockchainTx.hash);
+                }
+              } catch (blockchainError) {
+                console.error('Blockchain request failed:', blockchainError);
+              }
+            }
+            
             setTimeout(async () => {
               await loadAccessRequests();
             }, 1000);
-            alert(`Emergency access request created for patient ${patient.name}`);
+            
+            // Show dual storage feedback
+            if (blockchainTx) {
+              alert(`Emergency access request created for patient ${patient.name}\n\nDatabase: ✓ Stored\nBlockchain: ✓ Transaction ${blockchainTx.hash.slice(0, 10)}...`);
+            } else if (isConnected && contractReady) {
+              alert(`Emergency access request created for patient ${patient.name}\n\nDatabase: ✓ Stored\nBlockchain: ✗ Failed`);
+            } else {
+              alert(`Emergency access request created for patient ${patient.name}\n\nDatabase: ✓ Stored\nBlockchain: - Not connected`);
+            }
           } else {
             console.error('Access request error:', error);
             alert(`Error creating access request: ${error.message}`);
