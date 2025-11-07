@@ -297,6 +297,8 @@ const AppRoutes: React.FC = () => {
           )
         }
       />
+      <Route path="/patient/register" element={<PatientLogin />} />
+      <Route path="/patient/login" element={<PatientLogin />} />
       <Route
         path="/hospital"
         element={
