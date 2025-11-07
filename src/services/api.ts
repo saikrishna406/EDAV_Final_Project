@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:5002/api';
+const API_BASE_URL = 'http://localhost:3001/api';
 
 export const patientAPI = {
   generateWallet: async () => {
@@ -18,10 +18,13 @@ export const patientAPI = {
     return response.json();
   },
 
-  uploadRecord: async (file: File, patientId: string) => {
+  uploadRecord: async (file: File, patientId: string, encryptionKey?: string) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('patientId', patientId);
+    if (encryptionKey) {
+      formData.append('encryptionKey', encryptionKey);
+    }
 
     const response = await fetch(`${API_BASE_URL}/patient/upload-record`, {
       method: 'POST',

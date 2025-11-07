@@ -144,7 +144,7 @@ export const PatientLogin: React.FC = () => {
       };
 
       await new Promise(resolve => setTimeout(resolve, 1000));
-      await authContextLogin(data.user.id, patientDataToSave, 'patient');
+      await authContextLogin(data.user.id, patientDataToSave as any, 'patient');
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please try again.');
     } finally {

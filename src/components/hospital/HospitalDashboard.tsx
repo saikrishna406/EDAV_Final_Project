@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Header } from '../common/Header';
 import { Navigation } from '../common/Navigation';
 import { QRScanner } from './QRScanner';
-import { Scan, AlertTriangle, Clock, CheckCircle, XCircle, Eye, FileText, Wallet } from 'lucide-react';
+import { Scan, AlertTriangle, Clock, CheckCircle, XCircle, Eye, FileText, Wallet, QrCode } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { hospitalAPI } from '../../services/api';
+
 import { supabase } from '../../supabase';
 import { useMetaMask } from '../../hooks/useMetaMask';
 import { useContract } from '../../hooks/useContract';
@@ -19,8 +19,8 @@ export const HospitalDashboard: React.FC = () => {
   const [stats, setStats] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [selectedPatientRecords, setSelectedPatientRecords] = useState<any>(null);
   const { hospital } = useAuth();
-  const { isConnected, account, connectWallet, disconnectWallet, isLoading: walletLoading, error: walletError } = useMetaMask();
-  const { requestAccess, loading: contractLoading, isReady: contractReady } = useContract();
+  const { isConnected, account, connectWallet, isLoading: walletLoading, error: walletError } = useMetaMask();
+  const { requestAccess, isReady: contractReady } = useContract();
   const [blockchainTxHash, setBlockchainTxHash] = useState<string | null>(null);
 
   useEffect(() => {
@@ -213,7 +213,7 @@ export const HospitalDashboard: React.FC = () => {
 
   const viewHealthRecord = async (record: any) => {
     try {
-      console.log('Viewing actual uploaded record:', record);
+      console.log('Viewing record:', record.name);
       
       const mimeType = getMimeType(record.name);
       const fileData = await getFileData(record);
@@ -229,7 +229,7 @@ export const HospitalDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Error viewing record:', error);
-      alert('File not found. Patient may not have uploaded this record yet.');
+      alert('Cannot view file: ' + (error as Error).message);
     }
   };
 
@@ -263,6 +263,9 @@ export const HospitalDashboard: React.FC = () => {
   const getFileData = async (record: any) => {
     try {
       console.log('Getting and decrypting file for record:', record);
+      console.log('Record encryption_key:', record.encryption_key);
+      console.log('Record encryption_key type:', typeof record.encryption_key);
+      console.log('Record encryption_key exists:', !!record.encryption_key);
       
       let encryptedData = null;
       
@@ -288,19 +291,49 @@ export const HospitalDashboard: React.FC = () => {
       if (encryptedData && record.encryption_key) {
         console.log('Decrypting file with stored key');
         
-        // Decrypt the file
-        const decrypted = CryptoJS.AES.decrypt(encryptedData, record.encryption_key);
-        const decryptedWordArray = decrypted.toString(CryptoJS.enc.Base64);
-        
-        // Convert back to array buffer
-        const binaryString = atob(decryptedWordArray);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
+        try {
+          // Decrypt the file - get raw bytes directly
+          const decrypted = CryptoJS.AES.decrypt(encryptedData, record.encryption_key);
+          const decryptedBytes = decrypted.toString(CryptoJS.enc.Latin1);
+          
+          // Convert to Uint8Array
+          const bytes = new Uint8Array(decryptedBytes.length);
+          for (let i = 0; i < decryptedBytes.length; i++) {
+            bytes[i] = decryptedBytes.charCodeAt(i);
+          }
+          
+          console.log('File decrypted successfully, size:', bytes.length);
+          return bytes.buffer;
+        } catch (decryptError) {
+          console.error('Decryption failed:', decryptError);
+          throw new Error('Failed to decrypt file. Invalid encryption key or corrupted data.');
         }
+      }
+      
+      // If no encryption key, use default key based on patient ID
+      if (encryptedData && !record.encryption_key) {
+        console.warn('No encryption key found, using default key');
+        const defaultKey = `patient_${record.patient_id}_key`;
         
-        console.log('File decrypted successfully, size:', bytes.length);
-        return bytes.buffer;
+        try {
+          // Try to decrypt with default key - get raw bytes directly
+          const decrypted = CryptoJS.AES.decrypt(encryptedData, defaultKey);
+          const decryptedBytes = decrypted.toString(CryptoJS.enc.Latin1);
+          
+          // Convert to Uint8Array
+          const bytes = new Uint8Array(decryptedBytes.length);
+          for (let i = 0; i < decryptedBytes.length; i++) {
+            bytes[i] = decryptedBytes.charCodeAt(i);
+          }
+          
+          console.log('File decrypted with default key, size:', bytes.length);
+          return bytes.buffer;
+        } catch (decryptError) {
+          console.error('Default key decryption failed:', decryptError);
+          // Return raw data as fallback
+          const bytes = new TextEncoder().encode(encryptedData);
+          return bytes.buffer;
+        }
       }
       
       throw new Error(`Cannot decrypt file. Missing encrypted data or encryption_key.`);
@@ -342,6 +375,7 @@ export const HospitalDashboard: React.FC = () => {
       
       console.log('Patient data:', patient);
       console.log('Health records:', records);
+      console.log('First record encryption_key:', records?.[0]?.encryption_key);
       
       if (patient) {
         setSelectedPatientRecords({
@@ -464,7 +498,7 @@ export const HospitalDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Error processing emergency access:', error);
-      alert('Error: ' + error.message);
+      alert('Error: ' + (error as Error).message);
     } finally {
       setLoading(false);
     }

@@ -56,18 +56,21 @@ router.post('/upload-record', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    const { patientId } = req.body;
-    const encryptionKey = `patient_${patientId}_key`; // In production, use proper key management
+    const { patientId, encryptionKey } = req.body;
+    const keyToUse = encryptionKey || `patient_${patientId}_key`;
     
-    const ipfsHash = await uploadToIPFS(req.file.buffer, req.file.originalname, encryptionKey);
+    console.log('Uploading file with encryption key:', keyToUse);
+    const ipfsHash = await uploadToIPFS(req.file.buffer, req.file.originalname, keyToUse);
     
     res.json({
       success: true,
       ipfsHash,
       fileName: req.file.originalname,
-      size: req.file.size
+      size: req.file.size,
+      encryptionKey: keyToUse
     });
   } catch (error) {
+    console.error('Upload error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

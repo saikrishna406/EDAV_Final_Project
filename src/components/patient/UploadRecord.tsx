@@ -32,7 +32,7 @@ export const UploadRecord: React.FC<{ onUploadSuccess: () => void }> = ({ onUplo
     fileInputRef.current?.click();
   };
 
-  const uploadToIPFS = async (file: File, _key: string) => {
+  const uploadToIPFS = async (file: File, key: string) => {
     if (!user || !user.id) {
       setUploadError("User not logged in.");
       return;
@@ -40,92 +40,39 @@ export const UploadRecord: React.FC<{ onUploadSuccess: () => void }> = ({ onUplo
 
     setUploading(true);
     setUploadError(null);
-
-    // Read file as array buffer and encrypt it first
-    const arrayBuffer = await file.arrayBuffer();
-    const fileData = new Uint8Array(arrayBuffer);
-    
-    // Encrypt file data
-    const encrypted = CryptoJS.AES.encrypt(
-      CryptoJS.lib.WordArray.create(fileData), 
-      key
-    ).toString();
     
     try {
-      // Create encrypted file blob
-      const encryptedBlob = new Blob([encrypted], { type: 'text/plain' });
+      // Use backend API for upload (backend will handle encryption)
+      const keyToUse = key || `patient_${user.id}_key`;
+      const response = await patientAPI.uploadRecord(file, user.id, keyToUse);
       
-      // Upload to Pinata IPFS
-      const formData = new FormData();
-      formData.append('file', encryptedBlob, `encrypted_${file.name}`);
-      
-      const metadata = JSON.stringify({
-        name: `encrypted_${file.name}`,
-        keyvalues: {
-          patient_id: user.id,
-          original_name: file.name,
-          encrypted: 'true'
-        }
-      });
-      formData.append('pinataMetadata', metadata);
-      
-      const pinataResponse = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_PINATA_JWT}`
-        },
-        body: formData
-      });
-      
-      console.log('Pinata response status:', pinataResponse.status);
-      
-      console.log('Pinata response status:', pinataResponse.status);
-      
-      if (!pinataResponse.ok) {
-        const errorText = await pinataResponse.text();
-        console.error('Pinata error response:', errorText);
-        throw new Error(`Failed to upload to IPFS: ${pinataResponse.status} - ${errorText}`);
+      if (!response.success) {
+        throw new Error(response.error || 'Upload failed');
       }
       
-      const responseText = await pinataResponse.text();
-      console.log('Pinata raw response:', responseText);
-      
-      let pinataData;
-      try {
-        pinataData = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('Failed to parse Pinata response:', parseError);
-        throw new Error('Invalid response from Pinata');
-      }
-      
-      const ipfsHash = pinataData.IpfsHash;
-      if (!ipfsHash) {
-        console.error('No IPFS hash in response:', pinataData);
-        throw new Error('No IPFS hash returned from Pinata');
-      }
-      
+      const ipfsHash = response.ipfsHash;
       console.log('Successfully uploaded to IPFS:', ipfsHash);
       
       // Store record in database with IPFS hash and encryption key
-      try {
-        const { error: dbError } = await supabase.from('health_records').insert({
-          patient_id: user.id,
-          name: file.name,
-          type: file.type,
-          upload_date: new Date().toISOString(),
-          ipfs_cid: ipfsHash,
-          encryption_key: key,
-          is_encrypted: true,
-          size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        });
-        
-        if (dbError) {
-          console.warn('Database storage failed:', dbError);
-          // Continue without throwing error since IPFS upload succeeded
-        }
-      } catch (dbErr) {
-        console.warn('Database metadata storage failed:', dbErr);
-        // Continue without throwing error since IPFS upload succeeded
+      const actualKey = response.encryptionKey || keyToUse;
+      console.log('Storing record with encryption key:', actualKey);
+      const recordData = {
+        patient_id: user.id,
+        name: file.name,
+        type: file.type,
+        upload_date: new Date().toISOString(),
+        ipfs_cid: ipfsHash,
+        encryption_key: actualKey,
+        is_encrypted: true,
+        size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
+      };
+      console.log('Record data to insert:', recordData);
+      
+      const { error: dbError } = await supabase.from('health_records').insert(recordData);
+      
+      if (dbError) {
+        console.error('Database storage failed:', dbError);
+        throw new Error('Failed to save record metadata');
       }
       
       setSelectedFile(null);
@@ -167,14 +114,14 @@ export const UploadRecord: React.FC<{ onUploadSuccess: () => void }> = ({ onUplo
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Encryption Key (Temporary Example)</label>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Encryption Key</label>
           <div className="flex space-x-2">
             <input
               type="text"
-              value={encryptionKey}
+              value={encryptionKey || `patient_${user?.id}_key`}
               onChange={(e) => setEncryptionKey(e.target.value)}
               className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Enter encryption key or generate"
+              placeholder="Auto-generated patient key"
               disabled={uploading}
             />
             <button
@@ -186,8 +133,8 @@ export const UploadRecord: React.FC<{ onUploadSuccess: () => void }> = ({ onUplo
               Generate Key
             </button>
           </div>
-          <p className="text-xs text-red-500 mt-1">
-            WARNING: In a real system, securely manage this key. Do NOT store it in plain text in Firestore!
+          <p className="text-xs text-blue-600 mt-1">
+            Using patient-specific encryption key for hospital emergency access
           </p>
         </div>
 

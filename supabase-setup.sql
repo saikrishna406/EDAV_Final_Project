@@ -13,6 +13,30 @@ CREATE TABLE patients (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Create health_records table
+CREATE TABLE health_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id UUID REFERENCES patients(id),
+  name TEXT NOT NULL,
+  type TEXT,
+  upload_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  ipfs_cid TEXT,
+  encryption_key TEXT,
+  is_encrypted BOOLEAN DEFAULT true,
+  size TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create access_requests table
+CREATE TABLE access_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id UUID REFERENCES patients(id),
+  hospital_id TEXT,
+  status TEXT DEFAULT 'pending',
+  blockchain_tx TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Create hospitals table
 CREATE TABLE hospitals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

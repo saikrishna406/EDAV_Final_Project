@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Camera, Upload, Image } from 'lucide-react';
+import { Camera, Image } from 'lucide-react';
 
 interface QRScannerProps {
   onScan: (data: string) => void;

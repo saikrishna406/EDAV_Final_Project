@@ -6,7 +6,7 @@ import { GuardianWalletHelper } from './GuardianWalletHelper';
 import { useAuth } from '../../context/AuthContext';
 import QRCodeReact from 'react-qr-code';
 import { UploadRecord } from './UploadRecord';
-import { patientAPI, guardianAPI } from '../../services/api';
+
 import { supabase } from '../../supabase';
 import { useMetaMask } from '../../hooks/useMetaMask';
 import { useContract } from '../../hooks/useContract';
@@ -63,8 +63,8 @@ export const PatientDashboard: React.FC = () => {
   // New state for controlling the visibility of the UploadRecord modal
   const [showUploadModal, setShowUploadModal] = useState(false);
   const { isConnected, account, connectWallet, disconnectWallet, isLoading: walletLoading, error: walletError } = useMetaMask();
-  const { registerPatient, loading: contractLoading, isReady: contractReady } = useContract();
-  const [blockchainStatus, setBlockchainStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
+  const { registerPatient, isReady: contractReady } = useContract();
+  const [_blockchainStatus, setBlockchainStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
 
   // --- Data Fetching Logic ---
   const fetchPatientData = async () => {
@@ -465,6 +465,27 @@ export const PatientDashboard: React.FC = () => {
     );
   }
 
+  // If there was a fetch error after initial load, display it.
+  if (fetchError) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Patient Portal" />
+        <div className="flex">
+          <Navigation activeTab={activeTab} onTabChange={setActiveTab} userType="patient" />
+          <main className="flex-1 p-6">
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+              <strong className="font-bold">Error!</strong>
+              <span className="block sm:inline ml-2">{fetchError}</span>
+              <span className="absolute top-0 bottom-0 right-0 px-4 py-3 cursor-pointer" onClick={() => setFetchError(null)}>
+                <svg className="fill-current h-6 w-6 text-red-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><title>Close</title><path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.414l-2.651 2.651a1.2 1.2 0 1 1-1.697-1.697L8.303 9.757 5.652 7.106a1.2 1.2 0 0 1 1.697-1.697L10 8.061l2.651-2.651a1.2 1.2 0 0 1 1.697 1.697L11.697 9.757l2.651 2.651a1.2 1.2 0 0 1 0 1.697z"/></svg>
+              </span>
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
@@ -481,28 +502,6 @@ export const PatientDashboard: React.FC = () => {
         return renderDashboard();
     }
   };
-
-  // If there was a fetch error after initial load, display it.
-  if (fetchError) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <Header title="Patient Portal" />
-        <div className="flex">
-          <Navigation activeTab={activeTab} onTabChange={setActiveTab} userType="patient" />
-          <main className="flex-1 p-6">
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
-              <strong className="font-bold">Error!</strong>
-              <span className="block sm:inline ml-2">{fetchError}</span>
-              <span className="absolute top-0 bottom-0 right-0 px-4 py-3 cursor-pointer" onClick={() => setFetchError(null)}>
-                <svg className="fill-current h-6 w-6 text-red-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><title>Close</title><path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.414l-2.651 2.651a1.2 1.2 0 1 1-1.697-1.697L8.303 9.757 5.652 7.106a1.2 1.2 0 0 1 1.697-1.697L10 8.061l2.651-2.651a1.2 1.2 0 0 1 1.697 1.697L11.697 9.757l2.651 2.651a1.2 1.2 0 0 1 0 1.697z"/></svg>
-              </span>
-            </div>
-            {renderContent()}
-          </main>
-        </div>
-      </div>
-    );
-  }
 
 
   const renderDashboard = () => (
@@ -639,7 +638,7 @@ export const PatientDashboard: React.FC = () => {
             {user ? (
               <div id="emergency-qr" className="inline-flex items-center justify-center p-4 bg-white border rounded-xl mb-4">
                 <QRCodeReact
-                  value={`emergency:${isConnected ? account : (user.walletAddress || '0x' + Math.random().toString(16).substr(2, 40))}:${user.qr_code || user.id}`}
+                  value={`emergency:${isConnected ? account : (user.walletAddress || '0x' + Math.random().toString(16).substr(2, 40))}:${user.qrCode || user.id}`}
                   size={160}
                   level="M"
                 />
@@ -1052,7 +1051,7 @@ export const PatientDashboard: React.FC = () => {
             <p className="text-blue-100">{user?.email || 'No email provided'}</p>
             <div className="flex items-center space-x-4 mt-2">
               <span className="text-sm bg-white bg-opacity-20 px-2 py-1 rounded">
-                Blood: {user?.bloodGroup || user?.blood_group || 'Unknown'}
+                Blood: {user?.bloodGroup || 'Unknown'}
               </span>
               <span className="text-sm bg-white bg-opacity-20 px-2 py-1 rounded">
                 {user?.gender || 'Not specified'}
@@ -1104,28 +1103,21 @@ export const PatientDashboard: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-1">Blood Group</label>
               <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg">
                 <span className="text-red-700 font-semibold">
-                  {user?.bloodGroup || user?.blood_group || 
-                   (typeof user === 'object' && user ? Object.values(user).find(val => 
-                     typeof val === 'string' && /^(A|B|AB|O)[+-]$/.test(val)
-                   ) : null) || 'Not specified'}
+                  {user?.bloodGroup || 'Not specified'}
                 </span>
               </div>
               {/* Debug info */}
-              <div className="text-xs text-gray-400 mt-1">
-                Debug: {JSON.stringify({bloodGroup: user?.bloodGroup, blood_group: user?.blood_group})}
-              </div>
+
             </div>
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Emergency Contact</label>
               <div className="px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg">
                 <span className="text-orange-700">
-                  {user?.emergencyContact || user?.emergency_contact || 'Not provided'}
+                  {user?.emergencyContact || 'Not provided'}
                 </span>
               </div>
               {/* Debug info */}
-              <div className="text-xs text-gray-400 mt-1">
-                Debug: {JSON.stringify({emergencyContact: user?.emergencyContact, emergency_contact: user?.emergency_contact})}
-              </div>
+
             </div>
           </div>
         </div>
@@ -1235,23 +1227,6 @@ export const PatientDashboard: React.FC = () => {
       </div>
     </div>
   );
-
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'dashboard':
-        return renderDashboard();
-      case 'family':
-        return renderFamily();
-      case 'records':
-        return renderRecords();
-      case 'access-log':
-        return renderAccessLog();
-      case 'profile':
-        return renderProfile();
-      default:
-        return renderDashboard();
-    }
-  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">

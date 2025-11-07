@@ -38,12 +38,22 @@ const uploadToIPFS = async (fileBuffer, fileName, encryptionKey) => {
   try {
     const { apiKey, secretKey } = initIPFS();
     
-    // Encrypt the file
-    const encryptedData = encryptData(fileBuffer.toString('base64'), encryptionKey);
+    // Convert file buffer to Latin1 string for CryptoJS compatibility
+    let binaryString = '';
+    for (let i = 0; i < fileBuffer.length; i++) {
+      binaryString += String.fromCharCode(fileBuffer[i]);
+    }
+    
+    // Use CryptoJS for encryption to match frontend
+    const CryptoJS = require('crypto-js');
+    const encrypted = CryptoJS.AES.encrypt(binaryString, encryptionKey).toString();
     
     // Create form data
     const formData = new FormData();
-    formData.append('file', Buffer.from(encryptedData), fileName);
+    formData.append('file', Buffer.from(encrypted), {
+      filename: fileName,
+      contentType: 'application/octet-stream'
+    });
     
     // Upload to Pinata
     console.log('📤 Uploading to IPFS via Pinata:', fileName);
@@ -57,6 +67,7 @@ const uploadToIPFS = async (fileBuffer, fileName, encryptionKey) => {
     
     return response.data.IpfsHash;
   } catch (error) {
+    console.error('Pinata upload error:', error.response?.data || error.message);
     throw new Error(`IPFS upload failed: ${error.message}`);
   }
 };
@@ -71,10 +82,18 @@ const downloadFromIPFS = async (cid, encryptionKey) => {
     
     const encryptedData = response.data;
     
-    // Decrypt the data
-    const decryptedData = decryptData(encryptedData, encryptionKey);
+    // Use CryptoJS for decryption to match frontend
+    const CryptoJS = require('crypto-js');
+    const decrypted = CryptoJS.AES.decrypt(encryptedData, encryptionKey);
+    const decryptedBytes = decrypted.toString(CryptoJS.enc.Latin1);
     
-    return Buffer.from(decryptedData, 'base64');
+    // Convert to buffer
+    const buffer = Buffer.alloc(decryptedBytes.length);
+    for (let i = 0; i < decryptedBytes.length; i++) {
+      buffer[i] = decryptedBytes.charCodeAt(i);
+    }
+    
+    return buffer;
   } catch (error) {
     throw new Error(`IPFS download failed: ${error.message}`);
   }

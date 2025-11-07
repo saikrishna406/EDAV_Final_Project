@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { QrCode, Download } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { patientAPI } from '../../services/api';
 import QRCodeReact from 'react-qr-code';
 

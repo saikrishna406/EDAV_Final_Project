@@ -8,7 +8,7 @@ import EDAVAccessABI from '../contracts/EDAVAccess.json';
 const CONTRACT_ADDRESS = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
 
 export const useContract = () => {
-  const { isConnected, account } = useMetaMask();
+  const { isConnected } = useMetaMask();
   const [contract, setContract] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
